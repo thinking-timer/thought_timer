@@ -1,0 +1,692 @@
+/* =========================================================
+   생각 기록 타이머 - style.css
+   색상은 발표 자료(베이지 / 크림 / 세이지) 톤에 맞춤
+   아래 :root의 색은 기본값이고, '화면 색상'에서 고르면 script.js가 바꿔 줌
+   ========================================================= */
+
+:root {
+  --bg: #F5EEE8;        /* 배경 베이지 */
+  --card: #FFFFFF;
+  --cream: #F5EDDA;     /* 크림 */
+  --sage: #CFD1C7;      /* 세이지 */
+  --primary: #8C8B79;   /* 주요 버튼 */
+  --text: #3A3A3A;
+  --muted: #8A877D;
+  --line: #EEEAE2;
+  --field: #FCFAF7;
+  --border: #E4E0D8;    /* 입력칸 테두리 */
+  --danger-bg: #EBD9D3; /* 종료 버튼 */
+  --danger-text: #8A4B3E;
+  --on-primary: #FFFFFF;/* 주요 버튼 위 글자 */
+  --on-cream: #3A3A3A;  /* 크림색 칸 위 글자 */
+  --on-sage: #3A3A3A;   /* 세이지색 칸 위 글자 */
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+body {
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  padding: 32px 24px 32px 244px;   /* 왼쪽은 사이드바(220px) 자리 */
+  transition: background 0.3s;
+}
+
+/* ---------- 왼쪽 사이드바 ---------- */
+.sidebar {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 32px 16px;
+  background: var(--card);
+  border-right: 1px solid var(--line);
+}
+.brand h1 { font-size: 20px; font-weight: 800; line-height: 1.3; }
+.subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.side-nav { display: flex; flex-direction: column; gap: 4px; }
+.side-link {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.side-link:hover { background: var(--bg); }
+/* 메뉴 옆 생각 개수 */
+.side-count { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--muted); }
+/* 공부 중에는 사이드바를 숨기고, 그 자리까지 타이머 · 메모 칸이 넓게 씀 */
+body.studying { padding-left: 24px; }
+body.studying .sidebar { display: none; }
+
+/* ---------- 전체 배치 (메인 화면) ----------
+   왼쪽: 타이머 (넓게) / 오른쪽: 생각 적기 + 공부 질문
+   화면 가운데에 오도록: 가로는 margin auto, 세로는 화면 높이 안에서 align-content: center */
+.layout {
+  max-width: 1100px;
+  min-height: calc(100vh - 64px);   /* 화면 높이 - 위아래 여백 */
+  margin: 0 auto;
+  display: grid;
+  align-content: center;
+  grid-template-columns: 3fr 2fr;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "timer memo"
+    "timer pinned";
+  gap: 20px;
+}
+.pinned-card { grid-area: pinned; }
+.timer-card  { grid-area: timer; }
+.memo-card   { grid-area: memo; }
+
+@media (max-width: 760px) {
+  .layout {
+    min-height: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas: "timer" "memo" "pinned";
+  }
+}
+
+.card {
+  background: var(--card);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.card h2 { font-size: 18px; margin-bottom: 16px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.card-head h2 { margin: 0; }
+
+/* ---------- 공통 입력 / 버튼 ---------- */
+input, select, textarea {
+  font: inherit;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--field);
+  color: inherit;
+}
+textarea { resize: vertical; }
+input:disabled { color: var(--muted); }
+
+.btn {
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--bg);
+  color: var(--text);
+}
+.btn.primary { background: var(--primary); color: var(--on-primary); }
+.btn.danger  { background: var(--danger-bg); color: var(--danger-text); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.toast {
+  min-height: 1.4em;
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--text);   /* 버튼 색을 밝게 골라도 잘 읽히도록 글자색으로 */
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.toast.show { opacity: 1; }
+
+.muted { color: var(--muted); font-size: 14px; }
+.empty { color: var(--muted); text-align: center; padding: 24px 0; list-style: none; }
+
+/* ---------- ① 타이머 ---------- */
+.mode-tabs {
+  display: inline-flex;
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 12px;
+}
+.mode-btn, .hist-tab {
+  border: 0;
+  background: transparent;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mode-btn.active, .hist-tab.active { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.mode-btn:disabled { cursor: not-allowed; }
+
+/* 뽀모도로 시간 설정 */
+/* 집중 · 휴식 시간 선택 */
+.pomo-settings { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.time-row { display: flex; align-items: center; gap: 12px; }
+.pomo-settings[hidden], .time-row[hidden] { display: none; }
+.time-label { width: 32px; flex-shrink: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.time-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.time-chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.time-chip:hover { border-color: var(--primary); }
+.time-chip.active { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+
+.timer-card { display: flex; flex-direction: column; }
+.timer-display {
+  flex: 1;                       /* 타이머 칸이 남는 높이를 모두 차지 */
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  margin: 16px 0;
+  padding: 28px 16px;
+  border-radius: 16px;
+  text-align: center;
+  background: var(--cream);
+  color: var(--on-cream);
+  transition: background 0.3s;
+}
+/* 뽀모도로 휴식 시간에는 색을 바꿔서 구분 */
+.timer-card[data-phase="break"] .timer-display { background: var(--sage); color: var(--on-sage); }
+
+.phase-label { font-size: 16px; opacity: 0.65; }
+.time-text   { font-size: clamp(48px, 5.5vw, 88px); line-height: 1.1; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+.study-total { font-size: 13px; opacity: 0.65; min-height: 1.2em; }
+
+.timer-controls { display: flex; gap: 8px; }
+.timer-controls .btn { flex: 1; padding: 12px 16px; font-size: 16px; }
+
+/* ---------- ② 메모 입력 ---------- */
+#memoForm { display: flex; flex-direction: column; gap: 8px; }
+
+/* 카테고리 표시 (보관함 메모 · 해결함 표시) */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--cream);
+  color: var(--on-cream);
+  font-size: 12px;
+}
+
+
+/* ---------- ③ 보관함 ---------- */
+#filterSelect { width: auto; padding: 6px 10px; }
+
+.date-head { font-size: 13px; color: var(--muted); margin: 16px 0 8px; }
+.date-head:first-child { margin-top: 0; }
+
+.memo-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.memo-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+}
+.memo-meta { display: flex; gap: 8px; align-items: center; }
+.memo-time { font-size: 12px; color: var(--muted); }
+.memo-text { grid-column: 1; white-space: pre-wrap; word-break: break-word; }
+.del-btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.del-btn:hover { color: var(--danger-text); }
+
+/* ---------- ④ 공부 기록 그래프 (공부 기록함 창) ---------- */
+.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+.bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.bar { width: 100%; min-height: 2px; border-radius: 6px 6px 0 0; background: var(--sage); }
+.bar-col.today .bar { background: var(--primary); }
+.bar-label, .bar-value { font-size: 12px; color: var(--muted); min-height: 1.5em; } /* 글자가 없어도 높이 유지 → 막대 바닥이 한 줄로 맞춰짐 */
+.bar-col.today .bar-label { color: var(--text); font-weight: 700; }
+
+/* "공부 기록" · "생각 보관함" 제목 버튼 */
+.title-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.title-btn:hover { color: var(--primary); }
+.title-arrow { font-size: 22px; line-height: 1; color: var(--muted); }
+
+/* ---------- ⑤⑥ 옆에서 열리는 창 (왼쪽: 공부 기록 / 오른쪽: 생각 보관함) ---------- */
+body.no-scroll { overflow: hidden; }
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(58, 58, 58, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s, visibility 0.25s;
+}
+.drawer-backdrop.open { opacity: 1; visibility: visible; }
+
+.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: 11;
+  width: 50vw;                /* 화면의 절반 정도 */
+  min-width: 380px;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 28px 24px;
+  overflow-y: auto;           /* 내용이 많으면 창 안에서 스크롤 */
+  background: var(--card);
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.1);
+  visibility: hidden;
+  transition: transform 0.3s ease, visibility 0.3s;
+}
+.drawer-left  { left: 0;  border-radius: 0 24px 24px 0; transform: translateX(-100%); } /* 처음엔 왼쪽 밖에 숨어 있음 */
+.drawer-right { right: 0; border-radius: 24px 0 0 24px; transform: translateX(100%); }  /* 처음엔 오른쪽 밖에 숨어 있음 */
+.drawer.open  { transform: translateX(0); visibility: visible; }
+
+.sheet-head { display: flex; justify-content: space-between; align-items: center; }
+.sheet-head h2 { margin: 0; font-size: 18px; }
+.icon-close {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sheet-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.sheet-toolbar .mode-tabs { margin: 0; }
+.drawer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.drawer-toolbar select { width: auto; padding: 6px 10px; }
+.period-nav { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#periodLabel { min-width: 110px; text-align: center; }
+.nav-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.summary-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat { display: flex; flex-direction: column; padding: 12px 14px; border-radius: 14px; background: var(--bg); }
+.stat-label { font-size: 13px; color: var(--muted); }
+.stat strong { font-size: 18px; white-space: nowrap; }
+
+.history-chart { display: flex; gap: 4px; height: 200px; flex-shrink: 0; }
+.history-chart[data-view="month"] { gap: 2px; } /* 31일이라 막대 간격을 좁게 */
+.history-chart .bar-value,
+.history-chart .bar-label { font-size: 11px; white-space: nowrap; }
+
+.drawer-sub { font-size: 15px; margin-top: 4px; }
+.hint { font-size: 13px; color: var(--muted); margin: 2px 0 6px; }
+
+/* ---------- 공부 기록 목록 (수정 / 이어하기) ---------- */
+.record-list { list-style: none; }
+.record-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  transition: background 0.15s;
+}
+.record-item:hover { background: var(--field); }
+.record-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.record-goal { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.record-goal-input { padding: 4px 8px; font-size: 14px; font-weight: 600; }
+.record-meta { font-size: 12px; color: var(--muted); }
+.record-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.record-edit {
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.record-edit:hover { color: var(--text); }
+
+/* 휴대폰처럼 좁은 화면: 창을 거의 꽉 차게, 막대 위 시간은 숨김 (총 시간은 위 요약 칸에서 확인) */
+@media (max-width: 760px) {
+  .drawer { width: 92vw; min-width: 0; padding: 24px 16px; }
+  .summary-row { gap: 8px; }
+  .stat { padding: 10px; }
+  .stat-label { font-size: 12px; }
+  .stat strong { font-size: 13px; }
+  .history-chart .bar-value { display: none; }
+  .history-chart .bar-label { font-size: 10px; }
+}
+
+
+/* ---------- SNS에 올릴 이미지 만들기 ---------- */
+.share-box { display: flex; flex-direction: column; gap: 10px; padding-top: 16px; border-top: 1px solid var(--line); }
+.share-preview {                 /* 실제 이미지는 1080px, 화면에는 작게 보여 줌 */
+  align-self: center;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+.share-buttons { display: flex; justify-content: center; gap: 8px; }
+
+/* ---------- 공부 중 화면 ----------
+   공부를 시작하면 body에 studying 클래스가 붙음
+   → 사이드바가 숨겨지고(맨 위 '왼쪽 사이드바' 부분), 메모 칸 아래 안내 문구가 보임 */
+.focus-note { display: none; margin-top: 12px; font-size: 13px; color: var(--muted); }
+body.studying .focus-note { display: block; }
+
+/* 카드가 다시 나타날 때 부드럽게 */
+.card { animation: card-in 0.35s ease both; }
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+
+@media (max-width: 760px) {
+}
+
+/* ---------- 📌 공부 질문 버튼 (생각 적는 칸 위) ---------- */
+.q-toggle {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.q-toggle:hover { color: var(--text); border-color: var(--primary); }
+.q-toggle.active { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+
+/* ---------- 자동 분류 ---------- */
+.auto-hint { min-height: 1.3em; font-size: 13px; color: var(--muted); }
+
+/* ---------- 📌 공부 질문 (공부 중에도 보이는 목록) ---------- */
+.pinned-empty { font-size: 14px; color: var(--muted); line-height: 1.6; }
+.pinned-list { list-style: none; display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+.pinned-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--cream);
+  color: var(--on-cream);
+}
+.pin-text { flex: 1; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+.pin-check {                     /* 동그란 체크 버튼 — 누르면 해결 */
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  border: 2px solid var(--primary);
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.pin-check:hover { background: var(--primary); }
+
+/* 보관함 창: 카테고리 칩 버튼 · 해결한 메모 */
+.chip-btn { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
+.chip-btn:hover { background: var(--sage); }
+.memo-item.done .memo-text { color: var(--muted); text-decoration: line-through; }
+.chip.done-tag { background: var(--sage); }
+
+/* ---------- 화면 색상 창 ---------- */
+.drawer-narrow { width: 380px; }
+.theme-presets { display: flex; flex-wrap: wrap; gap: 14px; }
+.theme-btn {                    /* 대표색 동그라미 + 이름 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.theme-dot {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s;
+}
+.theme-btn:hover .theme-dot { transform: scale(1.08); }
+.theme-btn.active { color: var(--text); font-weight: 700; }
+.theme-btn.active .theme-dot { border-color: var(--card); box-shadow: 0 0 0 3px var(--primary); }
+.theme-custom { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.theme-custom input[type="color"] {
+  width: 44px;
+  height: 32px;
+  padding: 2px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+#themeReset { align-self: flex-start; }
+
+/* 좁은 화면: 사이드바를 위쪽 가로 막대로 */
+@media (max-width: 760px) {
+  body { padding: 0 16px 32px; }
+  .sidebar {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 -16px 20px;
+    padding: 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand .subtitle { display: none; }
+  .side-nav { flex-direction: row; }
+  .side-link { width: auto; padding: 8px 10px; font-size: 14px; }
+  .drawer-narrow { width: 92vw; }
+}
+
+/* ---------- 공부를 마치면 뜨는 창 (이번에 적은 생각) ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(58, 58, 58, 0.45);
+}
+.modal-box {
+  width: min(560px, 100%);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 24px 24px;
+  border-radius: 24px;
+  background: var(--card);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  animation: card-in 0.3s ease both;
+}
+.modal-box h2 { font-size: 20px; }
+.review-list { overflow-y: auto; padding: 4px 0; }
+#reviewDone { padding: 12px; font-size: 16px; }
+
+/* ---------- 타이머 아래 : 오늘 한 공부 이어하기 ---------- */
+.resume-box { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.resume-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.resume-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.resume-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.resume-btn:hover { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.resume-play { font-size: 11px; }
+.resume-goal { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.resume-time { opacity: 0.7; font-size: 13px; }
+
+@media (max-width: 760px) {
+  body.studying { padding-left: 16px; padding-top: 24px; }
+  .timer-display { min-height: 200px; }
+  .timer-controls .btn { padding: 12px 8px; font-size: 15px; white-space: nowrap; }
+}
+
+/* 공부를 마친 뒤 창의 삭제 버튼: 첫 번째 누름 → 확인 상태 */
+.del-btn.confirm { color: var(--danger-text); font-weight: 700; }
+
+/* ---------- 공부 중 표시 (박스들 위 여백에 크게) ---------- */
+body.studying .layout {
+  grid-template-areas:
+    "banner banner"
+    "timer  memo"
+    "timer  pinned";
+}
+.study-banner {
+  grid-area: banner;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding-bottom: 8px;
+  font-size: 52px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--primary);
+}
+.study-banner[hidden] { display: none; }
+.live-dot {                    /* 깜빡이는 점 = 지금 시간이 흐르는 중 */
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #D9534F;
+  animation: live-blink 1.4s ease-in-out infinite;
+}
+.study-banner.break { color: var(--muted); }
+.study-banner.break .live-dot { background: var(--sage); }
+@keyframes live-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+@media (max-width: 760px) {
+  body.studying .layout { grid-template-areas: "banner" "timer" "memo" "pinned"; }
+  .study-banner { font-size: 36px; }
+  .live-dot { width: 16px; height: 16px; }
+}
+
+/* 공부 내용을 안 적고 시작을 누르면 입력칸을 빨갛게 */
+#goalInput.need { border-color: #D9534F; box-shadow: 0 0 0 3px rgba(217, 83, 79, 0.15); }
+
+/* ---------- 보관 중인 생각 개수 ---------- */
+.memo-count {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--cream);
+  color: var(--on-cream);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ---------- 공부용 / 업무용 (사이드바 아래) ---------- */
+.use-tabs {
+  display: flex;
+  margin-top: auto;              /* 사이드바 맨 아래로 */
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--bg);
+}
+.use-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.use-btn.active { background: var(--card); color: var(--text); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
+
+@media (max-width: 760px) {
+  .use-tabs { margin-top: 0; width: 100%; }
+}
