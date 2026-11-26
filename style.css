@@ -254,9 +254,7 @@ input:disabled { color: var(--muted); }
 /* 뽀모도로 시간 설정 */
 /* 집중 · 휴식 시간 선택 */
 .pomo-settings { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-.time-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.pomo-settings[hidden], .time-row[hidden] { display: none; }
-.time-label { width: 32px; flex-shrink: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.pomo-settings[hidden] { display: none; }
 .time-choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .time-chip {
   padding: 6px 14px;
@@ -270,24 +268,36 @@ input:disabled { color: var(--muted); }
 }
 .time-chip:hover { border-color: var(--primary); }
 .time-chip.active { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
-/* − 25분 + : 미세 조절 */
-.time-step { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
-.time-step span { min-width: 48px; text-align: center; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.time-step button {
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--field);
-  color: var(--text);
+/* 위: 집중 | 휴식 탭 / 아래: 선택 버튼 한 줄 + 오른쪽 +5분 · +10분 */
+.pomo-settings { gap: 10px; }
+.time-tabs { display: inline-flex; align-self: flex-start; padding: 4px; border-radius: 999px; background: var(--bg); }
+.time-tabs button {
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
   font: inherit;
-  font-size: 16px;
-  line-height: 1;
+  font-size: 14px;
   cursor: pointer;
 }
-.time-step button:hover:not(:disabled) { border-color: var(--primary); }
-.time-step button:disabled { opacity: 0.35; cursor: not-allowed; }
-.time-step[hidden] { display: none; }
+.time-tabs button.on { background: var(--card); color: var(--text); font-weight: 700; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.time-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.time-add { display: flex; gap: 6px; margin-left: auto; }
+.time-add[hidden] { display: none; }
+.time-add button {
+  padding: 6px 12px;
+  border: 1px dashed var(--primary);
+  border-radius: 999px;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.time-add button:hover:not(:disabled) { background: var(--primary); color: var(--on-primary); }
+.time-add button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .timer-card { display: flex; flex-direction: column; }
 .timer-display {
@@ -759,3 +769,4 @@ body.no-scroll { overflow: hidden; }
 .memo-actions .auto-hint { flex: 1; min-height: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn.small { padding: 7px 16px; font-size: 14px; }
 .memo-card .q-toggle { padding: 5px 12px; font-size: 13px; }
+

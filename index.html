@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/gaegu@5.3.0/400.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/gaegu@5.3.0/700.css">
   <!-- ?v=날짜 : 파일을 고칠 때마다 바꾸면, 브라우저가 예전 파일 대신 새 파일을 받아 옴 -->
-  <link rel="stylesheet" href="style.css?v=20261126-6">
+  <link rel="stylesheet" href="style.css?v=20261126-8">
 </head>
 <body>
   <!-- 왼쪽 사이드바 (챗지피티처럼 접고 펼 수 있음, 공부 중에는 숨겨짐)
@@ -76,26 +76,18 @@
       </div>
 
       <!-- 집중 · 휴식 시간 고르기 (공부 중에는 숨김)
+           위 탭에서 집중 / 휴식을 고르면 → 아래 선택 버튼 한 줄과 +5분 · +10분이 그쪽에 적용됨
            집중 '제한 없음' = 계속 흐르는 타이머 / 시간을 고르면 집중 ↔ 휴식 반복 (뽀모도로) -->
       <div id="pomoSettings" class="pomo-settings">
-        <div class="time-row">
-          <span class="time-label">집중</span>
-          <div id="focusChoices" class="time-choices"></div>
-          <!-- − / + 로 5분씩 미세 조절 -->
-          <div id="focusStep" class="time-step">
-            <button type="button" data-phase="focus" data-step="-1" aria-label="집중 시간 줄이기">−</button>
-            <span id="focusValue"></span>
-            <button type="button" data-phase="focus" data-step="1" aria-label="집중 시간 늘리기">+</button>
-          </div>
+        <div class="time-tabs" role="tablist">
+          <button id="focusTab" type="button" role="tab" data-target="focus"></button>
+          <button id="breakTab" type="button" role="tab" data-target="break"></button>
         </div>
-        <div id="breakRow" class="time-row" hidden>
-          <span class="time-label">휴식</span>
-          <div id="breakChoices" class="time-choices"></div>
-          <!-- − / + 로 1분씩 미세 조절 -->
-          <div class="time-step">
-            <button type="button" data-phase="break" data-step="-1" aria-label="휴식 시간 줄이기">−</button>
-            <span id="breakValue"></span>
-            <button type="button" data-phase="break" data-step="1" aria-label="휴식 시간 늘리기">+</button>
+        <div class="time-line">
+          <div id="timeChoices" class="time-choices"></div>
+          <div id="timeAdd" class="time-add">
+            <button type="button" data-add="5">+5분</button>
+            <button type="button" data-add="10">+10분</button>
           </div>
         </div>
       </div>
@@ -230,6 +222,6 @@
     </div>
   </div>
 
-  <script src="script.js?v=20261126-6"></script>
+  <script src="script.js?v=20261126-8"></script>
 </body>
 </html>

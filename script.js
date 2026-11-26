@@ -33,9 +33,9 @@ const KEYS = {
 // 집중 / 휴식 시간 선택지(분) — 집중 0 = '제한 없음'(계속 흐르는 타이머), 그 외에는 뽀모도로처럼 집중 ↔ 휴식 반복
 const FOCUS_CHOICES = [0, 15, 20, 60, 120];
 const BREAK_CHOICES = [5, 10, 15, 20];
-// − / + 로 미세 조절: 한 번에 몇 분씩, 어디까지
-const TIME_STEP = { focus: 5, break: 1 };
+// +5분 · +10분 으로 더할 때 넘지 않는 범위 (분)
 const TIME_RANGE = { focus: [5, 180], break: [1, 60] };
+let addTarget = 'focus';   // 지금 고르고 있는 쪽 (위 탭): 'focus' | 'break'
 const DEFAULT_POMODORO = { focus: 0, break: 5 };
 
 // 카테고리는 직접 고르지 않고, 메모 내용을 보고 자동으로 정함 (5. 카테고리 자동 분류)
@@ -1413,31 +1413,41 @@ function clampTime(phase, minutes) {
 }
 
 function renderPomoSettings() {
-  const makeChips = (boxId, list, current, kind) => {
-    const box = $(boxId);
-    box.replaceChildren();
-    list.forEach((min) => {
-      const btn = el('button', 'time-chip', min === 0 ? '제한 없음' : `${min}분`);
-      btn.type = 'button';
-      btn.dataset[kind] = min;
-      btn.classList.toggle('active', min === current);
-      btn.setAttribute('aria-pressed', min === current);
-      box.append(btn);
-    });
-  };
-  makeChips('focusChoices', FOCUS_CHOICES, pomoSetting.focus, 'focus');
-  makeChips('breakChoices', BREAK_CHOICES, pomoSetting.break, 'break');
-  $('breakRow').hidden = pomoSetting.focus === 0;
+  if (pomoSetting.focus === 0) addTarget = 'focus';   // 제한 없음이면 휴식은 고를 필요 없음
+  const target = addTarget;
+  const current = pomoSetting[target];
+  const list = target === 'focus' ? FOCUS_CHOICES : BREAK_CHOICES;
 
-  // − / + 미세 조절 (집중이 '제한 없음'이면 숨김), 끝에 닿으면 그 버튼은 못 누름
-  $('focusStep').hidden = pomoSetting.focus === 0;
-  $('focusValue').textContent = `${pomoSetting.focus}분`;
-  $('breakValue').textContent = `${pomoSetting.break}분`;
-  document.querySelectorAll('[data-step]').forEach((btn) => {
-    const phase = btn.dataset.phase;
-    const [min, max] = TIME_RANGE[phase];
-    const v = pomoSetting[phase];
-    btn.disabled = Number(btn.dataset.step) < 0 ? v <= min : v >= max;
+  // 위 탭: 집중 25분 | 휴식 5분 (제한 없음이면 휴식 탭은 숨김)
+  $('focusTab').textContent = pomoSetting.focus ? `집중 ${pomoSetting.focus}분` : '집중 제한 없음';
+  $('breakTab').textContent = `휴식 ${pomoSetting.break}분`;
+  $('breakTab').hidden = pomoSetting.focus === 0;
+  document.querySelectorAll('.time-tabs button').forEach((tab) => {
+    const on = tab.dataset.target === target;
+    tab.classList.toggle('on', on);
+    tab.setAttribute('aria-selected', on);
+  });
+
+  // 아래 선택 버튼 한 줄: 지금 시간 이하 중 가장 큰 선택지가 진하게,
+  // +로 더했으면 그 버튼에 더한 시간을 보여 줌 (예: 20분 +5 → '25분')
+  const box = $('timeChoices');
+  box.replaceChildren();
+  const picked = current === 0 ? 0 : Math.max(...list.filter((m) => m > 0 && m <= current), list.find((m) => m > 0));
+  list.forEach((min) => {
+    const on = min === picked;
+    const shown = on ? current : min;
+    const btn = el('button', 'time-chip', shown === 0 ? '제한 없음' : `${shown}분`);
+    btn.type = 'button';
+    btn.dataset.minutes = min;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on);
+    box.append(btn);
+  });
+
+  // +5분 · +10분: 집중이 '제한 없음'이면 숨김, 최대에 닿으면 흐리게
+  $('timeAdd').hidden = pomoSetting.focus === 0;
+  document.querySelectorAll('[data-add]').forEach((btn) => {
+    btn.disabled = current >= TIME_RANGE[target][1];
   });
 }
 
@@ -1568,20 +1578,22 @@ $('startBtn').addEventListener('click', startTimer);
 $('stopBtn').addEventListener('click', stopTimer);
 
 // 집중 · 휴식 시간 선택
-$('focusChoices').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-focus]');
-  if (btn) setPomoSetting('focus', Number(btn.dataset.focus));
+// 선택 버튼 한 줄 → 위 탭에서 고른 쪽(집중 / 휴식)의 시간으로
+$('timeChoices').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-minutes]');
+  if (btn) setPomoSetting(addTarget, Number(btn.dataset.minutes));
 });
-$('breakChoices').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-break]');
-  if (btn) setPomoSetting('break', Number(btn.dataset.break));
-});
-// − / + 미세 조절
-document.querySelectorAll('[data-step]').forEach((btn) => {
+// +5분 · +10분: 위 탭에서 고른 쪽에 더하기 (넘으면 가장 큰 값까지)
+document.querySelectorAll('[data-add]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const phase = btn.dataset.phase;
-    const next = pomoSetting[phase] + Number(btn.dataset.step) * TIME_STEP[phase];
-    setPomoSetting(phase, clampTime(phase, next));
+    setPomoSetting(addTarget, clampTime(addTarget, pomoSetting[addTarget] + Number(btn.dataset.add)));
+  });
+});
+// 위 탭: 집중 / 휴식 고르기
+document.querySelectorAll('.time-tabs button').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    addTarget = tab.dataset.target;
+    renderPomoSettings();
   });
 });
 
