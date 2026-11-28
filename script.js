@@ -1269,9 +1269,13 @@ function renderNote() {
   });
   if (isTodo) renderTodos();
 
+  // 시작 전 타이머 위 버튼: 지금 열려 있는 쪽만 진하게
   document.body.classList.toggle('note-open', noteOpen);
-  $('openNote').classList.toggle('active', noteOpen);
-  $('openNote').setAttribute('aria-pressed', noteOpen);
+  [['openNote', 'note'], ['openTodo', 'todo']].forEach(([id, mode]) => {
+    const on = noteOpen && padMode === mode;
+    $(id).classList.toggle('active', on);
+    $(id).setAttribute('aria-pressed', on);
+  });
 }
 
 // ✅ 할 일 목록 그리기
@@ -1326,6 +1330,20 @@ function toggleNote(open = !noteOpen) {
   noteOpen = open;
   renderNote();
   if (noteOpen) focusPad();
+}
+
+// 시작 전 '📝 메모장' / '✅ 할 일' 버튼
+// - 닫혀 있으면 → 그쪽으로 열기
+// - 이미 그쪽이 열려 있으면 → 닫기
+// - 다른 쪽이 열려 있으면 → 그쪽으로 바꾸기
+function openPad(mode) {
+  if (noteOpen && padMode === mode) {
+    toggleNote(false);
+    return;
+  }
+  padMode = mode;
+  save(KEYS.pad, padMode);
+  toggleNote(true);
 }
 
 // 맨 왼쪽 위 버튼: 사이드바 숨기기 / 보이기 (다음에 열어도 그대로)
@@ -1870,7 +1888,8 @@ $('memoInput').addEventListener('input', renderAutoHint);
 
 // 📝 메모장: 적는 대로 바로 저장
 $('noteInput').addEventListener('input', (e) => saveNote(e.target.value));
-$('openNote').addEventListener('click', () => toggleNote());          // 시작 전: 타이머 옆에 메모장 열기 / 닫기
+$('openNote').addEventListener('click', () => openPad('note'));       // 시작 전: 타이머 옆에 메모장 열기 / 닫기
+$('openTodo').addEventListener('click', () => openPad('todo'));       // 시작 전: 타이머 옆에 할 일 열기 / 닫기
 $('closeNote').addEventListener('click', () => toggleNote(false));
 
 // [📝 메모장 | ✅ 할 일] 버튼: 누르면 칸이 바뀜

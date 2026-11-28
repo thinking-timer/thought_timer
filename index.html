@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jua@5/400.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/gowun-dodum@5/400.css">
   <!-- ?v=날짜 : 파일을 고칠 때마다 바꾸면, 브라우저가 예전 파일 대신 새 파일을 받아 옴 -->
-  <link rel="stylesheet" href="style.css?v=20261128-1">
+  <link rel="stylesheet" href="style.css?v=20261128-2">
 </head>
 <body>
   <!-- 맨 왼쪽 위 로고 : 누르면 사이드바를 숨기거나 다시 보여 줌 (공부 중에는 숨김) -->
@@ -78,8 +78,11 @@
     <section class="card timer-card" id="timerSection" data-phase="idle">
       <div class="timer-head">
         <h2 class="timer-title">타이머</h2>
-        <!-- 시작 전에만 보이는 작은 버튼 : 누르면 메모장이 열림 -->
-        <button id="openNote" class="note-btn" type="button" aria-pressed="false">📝 메모장</button>
+        <!-- 시작 전에만 보이는 작은 버튼 : 누르면 타이머 옆에 메모장 / 할 일이 열림 -->
+        <div class="note-btns">
+          <button id="openNote" class="note-btn" type="button" aria-pressed="false">📝 메모장</button>
+          <button id="openTodo" class="note-btn" type="button" aria-pressed="false">✅ 할 일</button>
+        </div>
       </div>
 
       <!-- 집중 · 휴식 시간 고르기 (공부 중에는 숨김)
@@ -302,8 +305,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-  <script src="firebase-config.js?v=20261128-1"></script>
-  <script src="sync.js?v=20261128-1"></script>
-  <script src="script.js?v=20261128-1"></script>
+  <script src="firebase-config.js?v=20261128-2"></script>
+  <script src="sync.js?v=20261128-2"></script>
+  <script src="script.js?v=20261128-2"></script>
 </body>
 </html>
