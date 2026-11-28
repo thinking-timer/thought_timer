@@ -6,6 +6,7 @@
    2. 상태(state) 불러오기
    3. 타이머 로직      ← 공부 공간
    4. 생각 메모        ← 생각 보관 공간
+      4-2. 할 일 목록  ← 메모장 칸에서 [메모장 | 할 일] 전환
    5. 카테고리 자동 분류
    6. 공부 기록
       6-2. SNS용 이미지 만들기
@@ -13,6 +14,8 @@
       7-2. 화면 색상
    8. 이벤트 연결 & 시작
    9. 앞으로 만들 기능 (TODO)
+
+   ※ 구글 로그인 · 기록 동기화는 sync.js에 따로 있음
    ========================================================= */
 
 
@@ -25,22 +28,23 @@ const KEYS = {
   records: 'ttt.records',
   pomodoro: 'ttt.pomodoro',
   theme: 'ttt.theme',
-  sidebar: 'ttt.sidebar',
+  note: 'ttt.note',
+  sideHidden: 'ttt.sideHidden',   // 사이드바를 숨겼는지
+  share: 'ttt.share',             // SNS 이미지 꾸미기 설정   // 📝 메모장
+  todos: 'ttt.todos',             // ✅ 할 일 목록
+  pad: 'ttt.pad',                 // 메모장 칸에 보여 줄 것: 'note'(메모장) | 'todo'(할 일)
 };
 
 
 // 뽀모도로 기본 시간(분) — 사용자가 화면에서 바꾸면 localStorage에 저장됨
 // 집중 / 휴식 시간 선택지(분) — 집중 0 = '제한 없음'(계속 흐르는 타이머), 그 외에는 뽀모도로처럼 집중 ↔ 휴식 반복
-const FOCUS_CHOICES = [0, 15, 20, 60, 120];
-const BREAK_CHOICES = [5, 10, 15, 20];
-// +5분 · +10분 으로 더할 때 넘지 않는 범위 (분)
-const TIME_RANGE = { focus: [5, 180], break: [1, 60] };
-let addTarget = 'focus';   // 지금 고르고 있는 쪽 (위 탭): 'focus' | 'break'
+const FOCUS_CHOICES = [0, 15, 25, 60, 120];   // 집중 시간 버튼 (0 = 제한 없음)
+const BREAK_CHOICES = [5, 10, 15, 20];        // 휴식 시간 버튼
+const TIME_MAX = { focus: 240, break: 60 };   // +5 · +10분으로 늘릴 수 있는 최대 (집중 4시간, 휴식 1시간)
 const DEFAULT_POMODORO = { focus: 0, break: 5 };
 
 // 카테고리는 직접 고르지 않고, 메모 내용을 보고 자동으로 정함 (5. 카테고리 자동 분류)
-const STUDY_Q = '공부 질문';     // 공부 중에도 화면에 메모지로 계속 보이는 카테고리
-const CATEGORIES = [STUDY_Q, '할 일', '아이디어', '궁금한 것', '기타'];
+const CATEGORIES = ['할 일', '아이디어', '궁금한 것', '기타'];
 
 function load(key, fallback) {
   try {
@@ -52,7 +56,10 @@ function load(key, fallback) {
 }
 
 function save(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  const text = JSON.stringify(value);
+  if (localStorage.getItem(key) === text) return;   // 바뀐 게 없으면 그대로
+  localStorage.setItem(key, text);
+  window.onDataSaved?.(key);   // 로그인 중이면 sync.js가 계정에도 저장함
 }
 
 // 메모 · 기록마다 붙이는 고유 번호
@@ -83,23 +90,29 @@ function defaultTimer() {
 }
 
 let timer = { ...defaultTimer(), ...load(KEYS.timer, {}) };
-if (timer.running && !timer.segStart) timer.segStart = timer.phaseStart || Date.now(); // 예전 버전에서 공부하던 중이었으면
-let memos = load(KEYS.memos, []);                       // [{ id, text, category, createdAt, done }]
+if (timer.running && timer.phase !== 'break' && !timer.segStart) timer.segStart = timer.phaseStart || Date.now(); // 예전 버전에서 공부하던 중이었으면
+let memos = load(KEYS.memos, []);                       // [{ id, text, category, createdAt }]
+// 예전 버전의 '공부 질문(공부 관련)' 카테고리는 없어졌으므로 '궁금한 것'으로 옮김
+if (memos.some((m) => m.category === '공부 질문')) {
+  memos = memos.map((m) => (m.category === '공부 질문' ? { ...m, category: '궁금한 것' } : m));
+  save(KEYS.memos, memos);
+}
 // [{ id, date, studyMs, mode, goal, endedAt, sessions }] — 예전 기록에 id가 없으면 붙여 줌
 let records = load(KEYS.records, []).map((r) => (r.id ? r : { ...r, id: makeId() }));
 save(KEYS.records, records);   // (아래 6번의 mergeTodayRecords()로 오늘 같은 이름 기록도 합침)
-let studyQMode = false;                                 // '📌 공부 질문' 버튼이 눌려 있는지
-let historyView = 'week';                               // 공부 기록함: 'week' | 'month'
-let historyCursor = new Date();                         // 공부 기록함: 지금 보고 있는 주(월요일) / 달
-let sideClosed = load(KEYS.sidebar, false) || window.innerWidth <= 760; // 사이드바 접힘 (휴대폰은 처음에 접힌 상태)
+let note = load(KEYS.note, '');                         // 📝 메모장 내용 (글 하나)
+let todos = load(KEYS.todos, []);                       // ✅ 할 일 [{ id, text, done, createdAt }]
+let padMode = load(KEYS.pad, 'note') === 'todo' ? 'todo' : 'note'; // 메모장 칸: 'note' | 'todo' (마지막에 보던 것 그대로)
+let historyView = 'week';                               // 기록 자세히 보기: 'week' | 'month'
+let historyCursor = new Date();                         // 기록 자세히 보기: 지금 보고 있는 주의 월요일 / 달의 1일
+let historyDay = null;                                  // 기록함 그래프에서 누른 날 ('2026-11-27') → 그날 기록을 아래에 보여 줌
 let pomoSetting = { ...DEFAULT_POMODORO, ...load(KEYS.pomodoro, {}) }; // { focus: 분(0 = 제한 없음), break: 분 }
-// 예전 버전 값 맞추기: 일반 모드였으면 '제한 없음', 선택지에 없는 시간이면 가장 가까운 선택지로
+// 예전 버전 값 맞추기: 일반 모드였으면 '제한 없음', 시간은 정해진 범위 안으로
 {
   const oldTimer = load(KEYS.timer, {});
   if (oldTimer.mode === 'normal' && !oldTimer.active) pomoSetting.focus = 0;
-  // 범위를 벗어난 값은 범위 안으로 (집중 0 = 제한 없음은 그대로)
-  if (pomoSetting.focus) pomoSetting.focus = clampTime('focus', pomoSetting.focus);
-  pomoSetting.break = clampTime('break', pomoSetting.break);
+  pomoSetting.focus = Math.min(TIME_MAX.focus, Math.max(0, Math.round(Number(pomoSetting.focus) || 0)));
+  pomoSetting.break = Math.min(TIME_MAX.break, Math.max(1, Math.round(Number(pomoSetting.break) || 5)));
 }
 // 집중 시간 선택에 따라 정해지는 모드: 제한 없음 → 'normal', 시간을 고르면 → 'pomodoro'
 const modeFromSetting = () => (pomoSetting.focus ? 'pomodoro' : 'normal');
@@ -132,33 +145,22 @@ function totalStudyMs() {
   return timer.studiedMs + (timer.phase === 'focus' ? phaseElapsed() : 0);
 }
 
-// 이름을 안 적고 시작하면 붙는 이름: 오늘 기록 중 '공부1, 공부2 …' 다음 번호
-function nextStudyName() {
-  const today = dateKey(new Date());
-  const used = records
-    .filter((r) => r.date === today)
-    .map((r) => /^공부(\d+)$/.exec((r.goal || '').trim()))
-    .filter(Boolean)
-    .map((m) => Number(m[1]));
-  return `공부${used.length ? Math.max(...used) + 1 : 1}`;
-}
-
 function startTimer() {
   if (timer.running) return;
 
   if (!timer.active) {               // 새로운 공부 시작
-    closeQuestions();
     timer.mode = modeFromSetting();  // 고른 집중 시간에 따라 (제한 없음 / 뽀모도로)
     timer.active = true;
     timer.sessionStart = Date.now();
-    timer.goal = $('goalInput').value.trim() || nextStudyName(); // 비워 두면 '공부1'처럼
+    // 이름을 안 적었으면 '공부 1', '공부 2' … 로 자동으로 붙임 (끝난 뒤에 고칠 수 있음)
+    timer.goal = $('goalInput').value.trim() || nextDefaultName();
     timer.phase = 'focus';
     timer.phaseElapsed = 0;
     timer.studiedMs = 0;
   }
   timer.running = true;              // 시작 또는 계속하기
   timer.phaseStart = Date.now();
-  timer.segStart = Date.now();       // 타임테이블용: 이 구간 시작
+  timer.segStart = timer.phase === 'focus' ? Date.now() : null;   // 타임테이블용: 이 구간 시작 (휴식 중이면 X)
 
   saveTimer();
   renderAll();
@@ -181,34 +183,32 @@ function stopTimer() {
   const added = studied - timer.resumeBase;   // 이번에 새로 공부한 시간
   const resumed = Boolean(timer.resumeId);
   const sessionMemos = memos.filter((m) => m.createdAt >= timer.sessionStart); // 이번 공부 동안 적은 생각
-  const name = timer.goal;
 
   if (timer.running) closeSegment();
-  if (added >= 1000) saveRecord(studied, added, timer.segments || []);
+  const record = added >= 1000 ? saveRecord(studied, added, timer.segments || []) : null;
+  mergeTodayRecords();   // 오늘 같은 이름 기록이 있으면 합침 (이름은 기록함의 '수정'에서 고침)
 
   timer = { ...defaultTimer(), mode: modeFromSetting() }; // 초기화
   saveTimer();
   $('goalInput').value = '';
 
   renderAll(); // 집중 모드가 끝나면서 사이드바 메뉴가 다시 열림
-  const done = resumed
-    ? `${name} · 이번에 ${fmtDuration(added)}, 모두 ${fmtDuration(studied)}`
-    : `${name} · ${fmtDuration(studied)}`;
 
   // 공부하면서 적은 생각이 있으면 그 생각만 큰 창으로 보여 줌 → '확인 완료'를 누르면 닫힘
   if (sessionMemos.length > 0) {
-    openReview(`${name} · ${fmtDuration(added)}`, sessionMemos);
+    openReview(added, sessionMemos);
   } else {
+    const done = resumed && record ? `모두 ${fmtDuration(record.studyMs)} 집중했어요` : `${fmtDuration(added)} 집중했어요`;
     showToast('timerToast', `수고했어요! ${done}`);
   }
 }
 
-// 공부를 마친 뒤 보여 주는 창: 이번 공부 시간 + 이번에 적은 생각 목록 (삭제 · 카테고리 바꾸기 가능)
-let reviewIds = [];   // 이 창에 보여 줄 메모 id (이번 공부 동안 적은 것)
+// 공부를 마친 뒤 보여 주는 창: 이번 공부 시간 + 이번에 적은 생각 목록 (삭제 · 카테고리 바꾸기)
+let reviewIds = [];        // 이 창에 보여 줄 메모 id (이번 공부 동안 적은 것)
 
-function openReview(summary, list) {
+function openReview(addedMs, list) {
   reviewIds = list.map((m) => m.id);
-  $('reviewTitle').textContent = `수고했어요! ${summary}`;
+  $('reviewTitle').textContent = `수고했어요! ${fmtDuration(addedMs)}`;
   renderReviewList();
   $('reviewModal').hidden = false;
   document.body.classList.add('no-scroll');
@@ -219,9 +219,8 @@ function renderReviewList() {
   const list = memos
     .filter((m) => reviewIds.includes(m.id))
     .sort((a, b) => a.createdAt - b.createdAt);   // 적은 순서대로
-  $('reviewDesc').textContent = list.length
-    ? `적어 둔 생각 ${list.length}개`
-    : '모두 정리했어요! 👍';
+  $('reviewDesc').textContent = list.length ? `적어 둔 생각 ${list.length}개` : '';
+  $('reviewList').hidden = list.length === 0;
   const ul = $('reviewList');
   ul.replaceChildren();
   list.forEach((m) => ul.append(memoItem(m, { withDelete: true })));
@@ -231,6 +230,7 @@ function closeReview() {
   if ($('reviewModal').hidden) return;
   $('reviewModal').hidden = true;
   document.body.classList.remove('no-scroll');
+  renderAll();
 }
 
 // 뽀모도로: 구간 시간이 다 되면 집중 ↔ 휴식 전환
@@ -240,11 +240,22 @@ function advancePomodoro() {
 
   let elapsed = phaseElapsed();
   let changed = false;
+  let phaseBegan = Date.now() - elapsed;   // 지금 구간이 시작된 시각
 
   while (elapsed >= phaseLength(timer.phase)) {
     const len = phaseLength(timer.phase);
-    if (timer.phase === 'focus') timer.studiedMs += len;
+    const boundary = phaseBegan + len;     // 집중 ↔ 휴식이 바뀐 시각
+    if (timer.phase === 'focus') {
+      timer.studiedMs += len;
+      // 타임테이블: 집중 구간은 여기서 끝 (휴식 시간은 공부 시간에 넣지 않음)
+      if (!Array.isArray(timer.segments)) timer.segments = [];
+      if (timer.segStart && boundary > timer.segStart) timer.segments.push([timer.segStart, boundary]);
+      timer.segStart = null;
+    } else {
+      timer.segStart = boundary;           // 휴식이 끝나면 새 집중 구간 시작
+    }
     timer.phase = timer.phase === 'focus' ? 'break' : 'focus';
+    phaseBegan = boundary;
     elapsed -= len;
     changed = true;
   }
@@ -286,40 +297,59 @@ function deleteMemo(id) {
   save(KEYS.memos, memos);
 }
 
-// 공부 질문 해결 표시 / 해제 — 해결한 질문은 공부 중 화면에서 사라지고, 보관함에는 남음
-function toggleDone(id) {
+// 카테고리 바꾸기 (자동 분류가 틀렸을 때 드롭다운에서 고름)
+// 공부 기록 삭제 (되돌릴 수 없음)
+function deleteRecord(id) {
+  records = records.filter((r) => r.id !== id);
+  save(KEYS.records, records);
+}
+
+function setCategory(id, category) {
   const m = memos.find((x) => x.id === id);
   if (!m) return;
-  m.done = !m.done;
+  m.category = category;
   save(KEYS.memos, memos);
 }
 
-// 보관함에서 카테고리 칩을 누르면 다음 카테고리로 바뀜 (자동 분류가 틀렸을 때 고치기)
-function cycleCategory(id) {
-  const m = memos.find((x) => x.id === id);
-  if (!m) return;
-  const i = CATEGORIES.indexOf(m.category);
-  m.category = CATEGORIES[(i + 1) % CATEGORIES.length];
-  save(KEYS.memos, memos);
+
+/* ---------- 4-2. 할 일 목록 ----------
+   메모장 칸 위쪽 [📝 메모장 | ✅ 할 일] 버튼으로 바꿔 가며 씀
+   - Enter로 추가, 체크하면 줄이 그어짐, × 로 하나 지우기
+   - '완료한 것 지우기'로 체크한 것만 한꺼번에 정리 */
+
+function addTodo(text) {
+  todos.push({ id: makeId(), text, done: false, createdAt: Date.now() });
+  save(KEYS.todos, todos);
+}
+
+function toggleTodo(id, done) {
+  const t = todos.find((x) => x.id === id);
+  if (!t) return;
+  t.done = done;
+  save(KEYS.todos, todos);
+}
+
+function deleteTodo(id) {
+  todos = todos.filter((t) => t.id !== id);
+  save(KEYS.todos, todos);
+}
+
+function clearDoneTodos() {
+  todos = todos.filter((t) => !t.done);
+  save(KEYS.todos, todos);
 }
 
 
 
 /* ---------- 5. 카테고리 자동 분류 ----------
    [방법] 글 속에 어떤 단어가 들어 있는지 보고 카테고리를 정하는 규칙 기반 분류
-   1) 공부 단어 + 질문 표현이 함께 있으면  → 공부 질문   예) 적분 공식이 왜 이렇게 되지?
-   2) 해야 할 일 표현이 있으면              → 할 일       예) 택배 주문해야지
-   3) 아이디어 표현이 있으면                → 아이디어    예) 타이머에 알림 소리 넣으면 좋겠다
-   4) 질문 표현만 있으면                    → 궁금한 것   예) 고양이는 왜 상자를 좋아할까?
-   5) 공부 단어만 있으면                    → 공부 질문   예) 3단원 개념 다시 보기
-   6) 아무것도 해당하지 않으면              → 기타
-   잘못 분류됐으면 보관함 창에서 카테고리 칩을 눌러 바꿀 수 있음 */
+   1) 해야 할 일 표현이 있으면   → 할 일       예) 택배 주문해야지
+   2) 아이디어 표현이 있으면     → 아이디어    예) 타이머에 알림 소리 넣으면 좋겠다
+   3) 질문 표현이 있으면         → 궁금한 것   예) 고양이는 왜 상자를 좋아할까?
+   4) 아무것도 해당하지 않으면   → 기타
+   잘못 분류됐으면 보관함 창 · 마친 뒤 창에서 드롭다운으로 바꿀 수 있음 */
 
 const KEYWORDS = {
-  study: ['문제', '공식', '정리', '증명', '개념', '풀이', '정답', '해설', '시험', '과제', '숙제', '강의', '수업',
-    '교재', '교수', '단원', '챕터', '페이지', '쪽', '문법', '단어', '수학', '미분', '적분', '물리', '화학', '생물',
-    '코드', '코딩', '함수', '변수', '알고리즘', '에러', '오류', '보고서', '레포트', '발표', '퀴즈', '중간고사',
-    '기말', '계산', '그래프', '행렬', '벡터', '확률', '통계', '실험', '이론', '법칙', '정의', '예제', '범위'],
   question: ['?', '왜', '어떻게', '뭐지', '뭘까', '무슨', '뜻', '의미', '차이', '이해가 안', '이해 안',
     '헷갈', '모르겠', '궁금', '맞나', '인가', '인지', '할까'],
   todo: ['해야', '써야', '봐야', '가야', '내야', '읽어야', '외워야', '사야', '사기', '주문', '예약', '연락', '전화', '보내', '제출', '챙기', '빨래', '청소', '택배',
@@ -336,16 +366,13 @@ function countWords(text, words) {
 function classifyMemo(raw) {
   const text = raw.replace(/\s+/g, ' ');
 
-  const study = countWords(text, KEYWORDS.study);
   const question = countWords(text, KEYWORDS.question);
   const todo = countWords(text, KEYWORDS.todo);
   const idea = countWords(text, KEYWORDS.idea);
 
-  if (study && question) return STUDY_Q;
   if (todo) return '할 일';
   if (idea) return '아이디어';
   if (question) return '궁금한 것';
-  if (study) return STUDY_Q;
   return '기타';
 }
 
@@ -361,13 +388,14 @@ function saveRecord(studied, added, segments) {
   const today = dateKey(new Date(timer.sessionStart));
   const old = records.find((r) => r.id === timer.resumeId);
 
+  let record;
   if (old && old.date === today) {
+    record = old;
     old.studyMs = studied;
-    old.goal = timer.goal;   // 이어서 하는 중에 목표를 고쳤다면 기록에도 반영
     old.endedAt = Date.now();
     old.sessions = [...sessionsOf(old), ...segments];
   } else {
-    records.push({
+    record = {
       id: makeId(),
       date: today,
       studyMs: added,
@@ -375,10 +403,23 @@ function saveRecord(studied, added, segments) {
       goal: timer.goal,
       endedAt: Date.now(),
       sessions: segments,
-    });
+    };
+    records.push(record);
   }
   save(KEYS.records, records);
-  mergeTodayRecords();
+  // 같은 이름 기록 합치기는 끝난 뒤 창에서 이름 · 시간을 고친 다음에 함 (closeReview)
+  return record;
+}
+
+// 이름을 안 적고 시작했을 때 붙이는 이름: 오늘 숫자로만 된 이름('1', '2' …) 중 가장 큰 번호 + 1
+function nextDefaultName() {
+  const today = dateKey(new Date());
+  const nums = records
+    .filter((r) => r.date === today)
+    .map((r) => /^\d+$/.exec((r.goal || '').trim()))
+    .filter(Boolean)
+    .map((m) => Number(m[0]));
+  return String(Math.max(0, ...nums) + 1);
 }
 
 // 기록의 공부 구간들 — 예전 기록에는 구간이 없어서 '끝난 시각 - 공부 시간 ~ 끝난 시각'으로 짐작
@@ -445,35 +486,6 @@ function resumeRecord(id) {
   showToast('timerToast', `${fmtDuration(r.studyMs)}부터 이어서 시작`);
 }
 
-// 공부 기록 삭제 (되돌릴 수 없음)
-function deleteRecord(id) {
-  records = records.filter((r) => r.id !== id);
-  save(KEYS.records, records);
-}
-
-// 삭제 버튼(휴지통)은 두 번 눌러야 지워짐 — 첫 번째: 빨갛게 '삭제' / 다른 곳을 누르면 원래대로
-// 처음 누른 거면 true (아직 지우지 않음), 두 번째면 false (이제 지우면 됨)
-function armDelete(btn) {
-  if (btn.classList.contains('confirm')) return false;
-  document.querySelectorAll('.rec-del.confirm').forEach((b) => {
-    b.classList.remove('confirm');
-    b.textContent = b.dataset.label;
-  });
-  btn.classList.add('confirm');
-  btn.textContent = '삭제';
-  return true;
-}
-
-// 공부 기록 삭제 버튼
-function confirmDelete(btn) {
-  if (armDelete(btn)) return false;
-  deleteRecord(btn.dataset.delId);
-  renderSidebar();
-  renderRecords();
-  showToast('timerToast', '기록을 지웠어요');
-  return true;
-}
-
 // 날짜별 공부 시간 합계 { '2026-10-25': 3600000, ... }
 function sumByDate() {
   const sums = {};
@@ -482,10 +494,11 @@ function sumByDate() {
 }
 
 /* ---------- 6-2. SNS용 이미지 만들기 (스프링 노트 플래너 스타일) ----------
+   [꾸미기] 날짜 밑 문장(오늘의 명언 / 직접 쓰기) · 글꼴 · 이미지 색상 · 과목별 색 — 고른 것은 localStorage에 저장
    canvas(그림판)에 오늘 공부 기록을 손글씨 플래너처럼 그려서 PNG 이미지로 저장 / 공유
    - 날짜 칸 + TOTAL + 시작 · 끝 시각 + 한마디 + 공부한 내용 체크리스트 + 10분 타임테이블(초록 형광펜)
    - 크기: 정사각형 1080×1080 (SNS 피드용)
-   - 손글씨 글꼴: Gaegu (index.html에서 불러옴, 없으면 기본 글꼴)
+   - 글꼴: 여러 손글씨 · 기본 글꼴 중 고름 (index.html에서 불러옴, 인터넷이 없으면 기본 글꼴)
    - 적은 생각(메모)은 넣지 않음 (개인적인 내용이 SNS에 올라가지 않게) */
 
 const SHARE_W = 1080;
@@ -493,19 +506,142 @@ const SHARE_H = 1080;
 const DAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
 const TIMETABLE_HOURS = [...Array(18).keys()].map((i) => i + 6).concat([0, 1, 2, 3, 4, 5]); // 6시 ~ 다음 날 5시
 
-// 플래너 색 (참고한 초록 플래너 느낌)
-const NOTE = {
+// 플래너 기본 색 (초록 플래너) — 이미지 색상 테마를 고르면 아래 SHARE_PALETTES의 색으로 덮어씀
+const NOTE_BASE = {
   desk: '#E8EFE0',       // 바깥 배경
   paper: '#FFFFFF',
   line: '#E3E3DE',       // 공책 줄
+  box: '#CFCFC8',        // 칸 테두리
   ink: '#3B3B3B',        // 손글씨
   soft: '#9A9A92',       // 연한 글씨
-  pen: '#A8D07A',        // 초록 형광펜
+  pen: '#A8D07A',        // 형광펜
   penDark: '#6FA544',    // 체크 표시
   ring: '#6E6E6E',       // 스프링
 };
-const HAND = '"Gaegu", "Pretendard", "Apple SD Gothic Neo", sans-serif';
-const hand = (weight, size) => `${weight} ${size}px ${HAND}`;
+const NOTE = { ...NOTE_BASE };   // 지금 그리는 이미지의 색 (그릴 때마다 테마에 맞춰 바뀜)
+
+// ----- 꾸미기 ① 이미지 색상 테마 -----
+const SHARE_PALETTES = [
+  { id: 'green',  name: '초록', desk: '#E8EFE0', pen: '#A8D07A', penDark: '#6FA544' },
+  { id: 'pink',   name: '분홍', desk: '#F7E7EB', pen: '#F5AFC1', penDark: '#D96B8C' },
+  { id: 'sky',    name: '하늘', desk: '#E2ECF5', pen: '#A3CDF0', penDark: '#4F8EC6' },
+  { id: 'yellow', name: '노랑', desk: '#F5EFD9', pen: '#F6D77E', penDark: '#C49A2C' },
+  { id: 'purple', name: '보라', desk: '#ECE6F5', pen: '#C6B5EC', penDark: '#8869CB' },
+  { id: 'night',  name: '밤',   desk: '#25272D', paper: '#33363E', line: '#444851', box: '#5A5E68',
+    ink: '#F1F1EE', soft: '#9FA3AC', pen: '#7FCBB6', penDark: '#7FCBB6', ring: '#9A9DA5' },
+];
+
+// ----- 꾸미기 ② 글꼴 (index.html에서 불러옴) -----
+// scale: 글꼴마다 글자 크기가 달라 보여서 맞추는 배율 / bold: 굵은 글꼴이 따로 있는지
+const SHARE_FONTS = [
+  { id: 'gaegu',       name: '개구',       family: '"Gaegu"',            scale: 1,    bold: true },
+  { id: 'nanum-pen',   name: '나눔펜',     family: '"Nanum Pen Script"', scale: 1.25, bold: false },
+  { id: 'hi-melody',   name: '하이멜로디', family: '"Hi Melody"',        scale: 1.1,  bold: false },
+  { id: 'jua',         name: '주아',       family: '"Jua"',              scale: 0.92, bold: false },
+  { id: 'gowun-dodum', name: '고운돋움',   family: '"Gowun Dodum"',      scale: 0.92, bold: false },
+  { id: 'pretendard',  name: '프리텐다드', family: '"Pretendard"',       scale: 0.9,  bold: true },
+];
+
+// ----- 꾸미기 ③ 과목별 색 (형광펜 색) -----
+const SUBJECT_COLORS = ['#A8D07A', '#F5AFC1', '#A3CDF0', '#F6D77E', '#C6B5EC', '#FFBE8F', '#8FDCCF'];
+
+// ----- 꾸미기 ④ 날짜 밑 문장: 오늘의 명언 (날짜마다 바뀜) -----
+const QUOTES = [
+  ['천 리 길도 한 걸음부터', '속담'],
+  ['시작이 반이다', '속담'],
+  ['티끌 모아 태산', '속담'],
+  ['낙숫물이 댓돌을 뚫는다', '속담'],
+  ['고생 끝에 낙이 온다', '속담'],
+  ['늦었다고 생각할 때가 가장 빠른 때다', '속담'],
+  ['실패는 성공의 어머니', '속담'],
+  ['뿌린 대로 거둔다', '속담'],
+  ['멈추지만 않는다면 얼마나 천천히 가는지는 중요하지 않다', '공자'],
+  ['배우고 때때로 익히면 즐겁지 아니한가', '공자'],
+  ['아는 것을 안다 하고, 모르는 것을 모른다 하는 것이 앎이다', '공자'],
+  ['가장 긴 여행도 한 걸음에서 시작된다', '노자'],
+  ['오늘 할 수 있는 일을 내일로 미루지 마라', '벤저민 프랭클린'],
+  ['잃어버린 시간은 다시 찾을 수 없다', '벤저민 프랭클린'],
+  ['천재는 1%의 영감과 99%의 노력이다', '토머스 에디슨'],
+  ['물방울이 바위를 뚫는 것은 힘이 아니라 꾸준함 덕분이다', '오비디우스'],
+  ['인생이 짧은 것이 아니라, 우리가 많이 낭비하는 것이다', '세네카'],
+  ['아는 것이 힘이다', '프랜시스 베이컨'],
+  ['작은 기회로부터 위대한 일이 시작된다', '데모스테네스'],
+  ['인내는 쓰다, 그러나 그 열매는 달다', '루소'],
+  ['할 수 있다고 믿기에 할 수 있다', '베르길리우스'],
+  ['배움은 결코 마음을 지치게 하지 않는다', '레오나르도 다 빈치'],
+  ['잘 시작된 일은 반쯤 끝난 것이다', '아리스토텔레스'],
+  ['서두르지 말고, 그러나 쉬지도 말라', '괴테'],
+];
+
+const DEFAULT_SHARE = {
+  textMode: 'quote',     // 'quote' = 오늘의 명언 / 'custom' = 직접 쓴 문장
+  custom: '',            // 직접 쓴 문장
+  font: 'gaegu',
+  palette: 'green',
+  paletteColor: '#7FA8D9', // 무지개(직접 고르기)로 고른 색
+  colors: {},            // { '미적분': '#F5AFC1', '영어': 'none', ... } 직접 고른 과목 색 ('none' = 색 없음)
+  shift: { date: '', n: 0 }, // '오늘의 명언'을 누른 횟수 (그날만 — 누를 때마다 다음 명언)
+};
+let shareSet = { ...DEFAULT_SHARE, ...load(KEYS.share, {}) };
+const saveShareSet = () => save(KEYS.share, shareSet);
+
+const shareFont = () => SHARE_FONTS.find((f) => f.id === shareSet.font) || SHARE_FONTS[0];
+const hand = (weight, size) => {
+  const f = shareFont();
+  return `${f.bold ? weight : 400} ${Math.round(size * f.scale)}px ${f.family}, "Pretendard", "Apple SD Gothic Neo", sans-serif`;
+};
+
+// 과목 이름을 같은 이름으로 보기 (앞뒤 공백 · 두 칸 띄어쓰기 무시)
+const subjectKey = (name) => (name || '').trim().replace(/\s+/g, ' ') || '목표 없음';
+
+// 오늘 기록의 과목 이름들 (처음 기록한 순서대로, 같은 이름은 한 번만)
+function todaySubjects() {
+  const today = dateKey(new Date());
+  const names = records
+    .filter((r) => r.date === today)
+    .sort((a, b) => a.endedAt - b.endedAt)
+    .map((r) => subjectKey(r.goal));
+  return [...new Set(names)];
+}
+
+// 과목 색: 직접 고른 색이 있으면 그 색('none' = 색 없음), 없으면 오늘 순서대로 자동으로
+function subjectColor(name) {
+  const key = subjectKey(name);
+  if (shareSet.colors[key]) return shareSet.colors[key];
+  const i = todaySubjects().indexOf(key);
+  return SUBJECT_COLORS[Math.max(0, i) % SUBJECT_COLORS.length];
+}
+
+// 날짜 밑 문장: 오늘의 명언(날짜마다 다른 명언) 또는 직접 쓴 문장
+function shareSentence() {
+  if (shareSet.textMode === 'custom') {
+    const text = shareSet.custom.trim();
+    return { text: text || '잡생각은 적어 두고, 공부는 계속했다!', author: '' };
+  }
+  const now = new Date();
+  const day = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 86400000);
+  const n = shareSet.shift.date === dateKey(now) ? shareSet.shift.n : 0;
+  const [text, author] = QUOTES[(day + n) % QUOTES.length];
+  return { text, author };
+}
+
+// 문장을 maxWidth 안에 들어가게 여러 줄로 나눔 (띄어쓰기 기준, 긴 단어는 글자 단위로)
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  let cur = '';
+  text.split(' ').forEach((word) => {
+    const next = cur ? `${cur} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth) { cur = next; return; }
+    if (cur) lines.push(cur);
+    cur = '';
+    for (const ch of word) {
+      if (ctx.measureText(cur + ch).width > maxWidth && cur) { lines.push(cur); cur = ''; }
+      cur += ch;
+    }
+  });
+  if (cur) lines.push(cur);
+  return lines;
+}
 
 // 시간 표시: 플래너식 '4H 55M' / 타임테이블 옆 '9:10'
 function fmtHM(ms) {
@@ -560,7 +696,7 @@ function line(ctx, x1, y1, x2, y2, color = NOTE.line, w = 2) {
 // 테두리만 있는 칸 (손으로 그은 느낌이 나게 살짝 둥글게)
 function box(ctx, x, y, w, h) {
   roundRect(ctx, x, y, w, h, 6);
-  ctx.strokeStyle = '#CFCFC8';
+  ctx.strokeStyle = NOTE.box;
   ctx.lineWidth = 2;
   ctx.stroke();
 }
@@ -602,8 +738,8 @@ function clover(ctx, cx, cy, r, rot = 0) {
 }
 
 // 형광펜으로 칠한 듯한 칸 (끝이 살짝 둥글고 조금 투명)
-function highlight(ctx, x, y, w, h) {
-  ctx.fillStyle = withAlpha(NOTE.pen, 0.85);
+function highlight(ctx, x, y, w, h, color = NOTE.pen) {
+  ctx.fillStyle = withAlpha(color, 0.85);
   roundRect(ctx, x, y, w, h, Math.min(4, h / 3));
   ctx.fill();
 }
@@ -660,7 +796,7 @@ function drawDateBoxes(ctx, x, y, digits, dayText) {
   });
   let nx = x + digits.length * (bw + 6) + 14;
   if (dayText) {
-    ctx.strokeStyle = '#CFCFC8';
+    ctx.strokeStyle = NOTE.box;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(nx + 34, y + bh / 2, 30, 0, Math.PI * 2);
@@ -692,8 +828,8 @@ function drawTotalBox(ctx, R, y, totalMs, pairs) {
   const ty = y + 84;
   const cw = w / 2;
   box(ctx, x, ty, w, 96);
-  line(ctx, x + cw, ty, x + cw, ty + 96, '#CFCFC8');
-  line(ctx, x, ty + 38, R, ty + 38, '#CFCFC8');
+  line(ctx, x + cw, ty, x + cw, ty + 96, NOTE.box);
+  line(ctx, x, ty + 38, R, ty + 38, NOTE.box);
   pairs.forEach(([name, value], i) => {
     ctx.textAlign = 'center';
     ctx.font = hand(400, 24);
@@ -707,11 +843,25 @@ function drawTotalBox(ctx, R, y, totalMs, pairs) {
   return ty + 96;
 }
 
-// 손글씨 한마디 + 클로버
-function drawComment(ctx, x, y, lines) {
-  ctx.font = hand(400, 34);
+// 날짜 밑 문장 (명언 또는 직접 쓴 문장) + 클로버
+// 두 줄에 들어가도록 글자 크기를 줄여 보고, 그래도 길면 두 번째 줄 끝을 '…'으로
+function drawComment(ctx, x, y, maxWidth, { text, author }) {
+  let size = 34;
+  let lines;
+  do {
+    ctx.font = hand(400, size);
+    lines = wrapText(ctx, text, maxWidth);
+    size -= 2;
+  } while (lines.length > 2 && size >= 26);
+  if (lines.length > 2) lines = [lines[0], fitText(ctx, lines.slice(1).join(' '), maxWidth)];
+
   ctx.fillStyle = NOTE.ink;
-  lines.forEach((t, i) => ctx.fillText(t, x + 50, y + 40 + i * 44));
+  lines.forEach((t, i) => ctx.fillText(t, x + 50, y + 40 + i * 42));
+  if (author) {
+    ctx.font = hand(400, 22);
+    ctx.fillStyle = NOTE.soft;
+    ctx.fillText(`- ${author}`, x + 50, y + 40 + lines.length * 42 - 8);
+  }
   clover(ctx, x + 18, y + 22, 14, -0.3);
 }
 
@@ -722,15 +872,19 @@ function drawShareImage(canvas) {
   canvas.height = H;
   const ctx = canvas.getContext('2d');
   ctx.textBaseline = 'alphabetic';
+  // 고른 색상 테마로 색 바꾸기 (테마에 없는 색은 기본 색)
+  Object.assign(NOTE, NOTE_BASE, currentPalette());
   const area = drawNotebook(ctx, W, H);
   drawNoteToday(ctx, area);
+}
 
-  // 오른쪽 아래 작은 앱 이름
-  ctx.font = hand(700, 26);
-  ctx.fillStyle = NOTE.soft;
-  ctx.textAlign = 'right';
-  ctx.fillText('생각 기록 타이머', area.R, area.B + 22);
-  ctx.textAlign = 'left';
+// 지금 고른 이미지 색: 테마 6개 중 하나, 또는 무지개로 직접 고른 색으로 만든 테마
+function currentPalette() {
+  if (shareSet.palette === 'custom') {
+    const c = shareSet.paletteColor;
+    return { desk: tint(c, 0.85), pen: tint(c, 0.45), penDark: c };
+  }
+  return SHARE_PALETTES.find((p) => p.id === shareSet.palette) || SHARE_PALETTES[0];
 }
 
 // ===== 오늘 =====
@@ -739,7 +893,12 @@ function drawNoteToday(ctx, { L, R, T, B }) {
   const today = dateKey(now);
   const list = records.filter((r) => r.date === today).sort((a, b) => a.endedAt - b.endedAt);
   const total = list.reduce((n, r) => n + r.studyMs, 0);
-  const allSessions = list.flatMap((r) => sessionsOf(r));
+  // 공부 구간마다 칠할 색: 과목 색 ('색 없음'이면 테마의 형광펜 색)
+  const colorOf = (r) => {
+    const c = subjectColor(r.goal);
+    return c === 'none' ? NOTE.pen : c;
+  };
+  const allSessions = list.flatMap((r) => sessionsOf(r).map(([s, e]) => [s, e, colorOf(r)]));
   const start = allSessions.length ? Math.min(...allSessions.map((s) => s[0])) : null;
   const end = allSessions.length ? Math.max(...allSessions.map((s) => s[1])) : null;
 
@@ -751,8 +910,8 @@ function drawNoteToday(ctx, { L, R, T, B }) {
     ['끝', end ? fmtClockTime(end) : '-'],
   ]);
 
-  // 한마디 (앱 소개 문구)
-  drawComment(ctx, L, T + 92, ['잡생각은 적어 두고,', `공부는 계속했다!`]);
+  // 날짜 밑 문장 (오늘의 명언 / 직접 쓴 문장) — 오른쪽 TOTAL 칸 앞까지
+  drawComment(ctx, L, T + 92, R - 300 - 24 - (L + 50), shareSentence());
 
   // 본문: 왼쪽 체크리스트 + 오른쪽 타임테이블 (같은 줄 간격을 함께 씀)
   const top = Math.max(tableBottom, T + 200) + 24;
@@ -774,15 +933,20 @@ function drawNoteToday(ctx, { L, R, T, B }) {
   list.slice(0, listRows).forEach((r, i) => {
     const ry = top + i * listRowH;
     const cs = Math.min(30, listRowH * 0.5);
+    const name = fitText(ctx, r.goal || '목표 없음', listR - L - cs - 20);
+    // 이름 아래쪽에 그 과목 색으로 형광펜 밑줄 (타임테이블 색과 같음, '색 없음'이면 밑줄 없음)
+    if (subjectColor(r.goal) !== 'none') {
+      highlight(ctx, L, ry + listRowH * 0.42, ctx.measureText(name).width + 10, listRowH * 0.34, colorOf(r));
+    }
     ctx.fillStyle = NOTE.ink;
-    ctx.fillText(fitText(ctx, r.goal || '목표 없음', listR - L - cs - 20), L + 4, ry + listRowH * 0.66);
+    ctx.fillText(name, L + 4, ry + listRowH * 0.66);
     box(ctx, listR - cs, ry + (listRowH - cs) / 2, cs, cs);
     check(ctx, listR - cs + 3, ry + (listRowH - cs) / 2 + 2, cs);
   });
 
   // 공부한 시간대 칠하기 (초록 형광펜)
   const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  allSessions.forEach(([s, e]) => {
+  allSessions.forEach(([s, e, color]) => {
     TIMETABLE_HOURS.forEach((h, row) => {
       const hs = dayStart + h * 3600000;
       const a = Math.max(s, hs);
@@ -790,7 +954,7 @@ function drawNoteToday(ctx, { L, R, T, B }) {
       if (b <= a) return;
       const x1 = GX + ((a - hs) / 3600000) * GW;
       const x2 = GX + ((b - hs) / 3600000) * GW;
-      highlight(ctx, x1 + 1, top + row * rowH + rowH * 0.18, Math.max(3, x2 - x1 - 2), rowH * 0.64);
+      highlight(ctx, x1 + 1, top + row * rowH + rowH * 0.18, Math.max(3, x2 - x1 - 2), rowH * 0.64, color);
     });
   });
 
@@ -802,8 +966,8 @@ function drawNoteToday(ctx, { L, R, T, B }) {
   ctx.textAlign = 'center';
   TIMETABLE_HOURS.forEach((h, row) => ctx.fillText(String(h), TL + hourW / 2, top + row * rowH + rowH * 0.7));
   ctx.textAlign = 'left';
-  line(ctx, TL, top, TL, B, '#CFCFC8');
-  for (let c = 0; c <= 6; c++) line(ctx, GX + (GW / 6) * c, top, GX + (GW / 6) * c, B, c === 0 || c === 6 ? '#CFCFC8' : NOTE.line, 1.5);
+  line(ctx, TL, top, TL, B, NOTE.box);
+  for (let c = 0; c <= 6; c++) line(ctx, GX + (GW / 6) * c, top, GX + (GW / 6) * c, B, c === 0 || c === 6 ? NOTE.box : NOTE.line, 1.5);
 
   if (list.length === 0) {
     ctx.font = hand(400, 30);
@@ -814,22 +978,129 @@ function drawNoteToday(ctx, { L, R, T, B }) {
   clover(ctx, TL - 70, B - 40, 18, 0.4);  // 아래쪽 클로버 낙서
 }
 
-// 손글씨 글꼴(Gaegu)에서 이미지에 쓸 글자들을 불러오기
+// 고른 글꼴에서 이미지에 쓸 글자들을 불러오기
 // 글꼴이 글자 묶음별로 나뉘어 있어서, 쓸 글자를 알려 줘야 그 부분을 내려받음
 function loadHandFont() {
   if (!document.fonts) return Promise.resolve();
-  const sample = `0123456789:HMTOTAL시작끝월화수목금토일 ${records.map((r) => r.goal).join('')}잡생각은 적어 두고,공부업무는 계속했다!오늘은 아직 기록이 없어요목표 없음생각 기록 타이머`;
+  const { text, author } = shareSentence();
+  const sample = `0123456789:HMTOTAL시작끝월화수목금토일 ${records.map((r) => r.goal).join('')}${text}${author}-…오늘은 아직 기록이 없어요목표 없음`;
   return Promise.all([
     document.fonts.load(hand(400, 30), sample),
     document.fonts.load(hand(700, 30), sample),
   ]).catch(() => {});
 }
 
-// 공부 기록함 창의 미리보기 다시 그리기
-function renderShare() {
+// 미리보기 다시 그리기: 기록함의 작은 그림 + 수정 창의 큰 그림 (꾸미기 버튼들도 함께)
+function drawSharePreviews() {
   drawShareImage($('shareCanvas'));
+  const big = $('shareCanvasBig');
+  big.width = SHARE_W;
+  big.height = SHARE_H;
+  big.getContext('2d').drawImage($('shareCanvas'), 0, 0);
+}
+
+function renderShare() {
+  renderShareOptions();
+  drawSharePreviews();
   // 손글씨 글꼴을 다 불러오면 한 번 더 그림 (먼저 그리면 기본 글꼴로 그려짐)
-  loadHandFont().then(() => drawShareImage($('shareCanvas')));
+  loadHandFont().then(drawSharePreviews);
+}
+
+// 수정 창 열기 / 닫기 (기록함 창 위에 뜸)
+function openShareEdit() {
+  renderShare();
+  $('shareModal').hidden = false;
+  $('closeShareModal').focus();
+}
+function closeShareEdit() {
+  if ($('shareModal').hidden) return false;
+  $('shareModal').hidden = true;
+  $('openShareEdit').focus();
+  return true;
+}
+
+// 꾸미기 버튼들 그리기: 문장 / 글꼴 / 색상 / 과목 색
+function renderShareOptions() {
+  const chip = (text, data, active) => {
+    const btn = el('button', 'time-chip', text);
+    btn.type = 'button';
+    Object.assign(btn.dataset, data);
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active);
+    return btn;
+  };
+
+  // 문장: 오늘의 명언 / 직접 쓰기 (직접 쓰기일 때만 입력칸)
+  const isQuote = shareSet.textMode === 'quote';
+  document.querySelectorAll('[data-text-mode]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.textMode === shareSet.textMode);
+    b.setAttribute('aria-pressed', b.dataset.textMode === shareSet.textMode);
+  });
+  $('shareText').hidden = isQuote;
+  if (document.activeElement !== $('shareText')) $('shareText').value = shareSet.custom;
+
+  // 글꼴: 버튼 글자를 그 글꼴로 보여 줌
+  $('shareFonts').replaceChildren(...SHARE_FONTS.map((f) => {
+    const btn = chip(f.name, { font: f.id }, f.id === shareSet.font);
+    btn.style.fontFamily = `${f.family}, "Pretendard", sans-serif`;
+    return btn;
+  }));
+
+  // 이미지 색상: 형광펜 색 동그라미 (배경색 테두리)
+  $('sharePalettes').replaceChildren(...SHARE_PALETTES.map((p) => {
+    const btn = el('button', 'palette-btn');
+    btn.type = 'button';
+    btn.dataset.palette = p.id;
+    btn.title = p.name;
+    btn.setAttribute('aria-label', p.name);
+    btn.classList.toggle('active', p.id === shareSet.palette);
+    btn.style.setProperty('--desk', p.desk);
+    btn.style.setProperty('--pen', p.pen);
+    return btn;
+  }));
+  // 무지개(직접 고르기): 고른 상태면 테두리 표시 — 이 버튼은 index.html에 고정 (다시 그리면 색 고르기 창이 닫혀서)
+  $('paletteCustom').classList.toggle('active', shareSet.palette === 'custom');
+  if (document.activeElement !== $('paletteColor')) $('paletteColor').value = shareSet.paletteColor;
+
+  // 과목 색: 오늘 과목마다 색 고르기 (맨 끝 빨간 사선 동그라미 = 색 없음)
+  const subjects = todaySubjects();
+  const box = $('subjectList');
+  if (subjects.length === 0) {
+    box.replaceChildren(el('span', 'muted', '오늘 기록이 없어요'));
+    return;
+  }
+  box.replaceChildren(...subjects.map((name) => {
+    const row = el('div', 'subject-row');
+    const dots = el('div', 'subject-dots');
+    const current = subjectColor(name);
+    SUBJECT_COLORS.forEach((c) => {
+      const dot = el('button', 'subject-dot');
+      dot.type = 'button';
+      dot.dataset.subject = name;
+      dot.dataset.color = c;
+      dot.style.background = c;
+      dot.classList.toggle('active', c === current);
+      dot.setAttribute('aria-label', `${name} 색`);
+      dots.append(dot);
+    });
+    const none = el('button', 'subject-dot subject-none');
+    none.type = 'button';
+    none.dataset.subject = name;
+    none.dataset.color = 'none';
+    none.title = '색 없음';
+    none.setAttribute('aria-label', `${name} 색 없음`);
+    none.classList.toggle('active', current === 'none');
+    dots.append(none);
+    row.append(el('span', 'subject-name', name), dots);
+    return row;
+  }));
+}
+
+// 꾸미기 설정을 바꾸고 미리보기 다시 그리기
+function setShare(change) {
+  Object.assign(shareSet, change);
+  saveShareSet();
+  renderShare();
 }
 
 function shareFileName() {
@@ -837,7 +1108,7 @@ function shareFileName() {
 }
 
 // 이미지 파일로 저장
-function saveShareImage() {
+function saveShareImage(toastId = 'shareToast') {
   $('shareCanvas').toBlob((blob) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -847,7 +1118,7 @@ function saveShareImage() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('shareToast', '저장했어요');
+    showToast(toastId, '저장했어요');
   }, 'image/png');
 }
 
@@ -935,10 +1206,10 @@ function renderTimer() {
     label = timer.phase === 'focus' ? '집중' : '휴식';
   } else {
     clock = fmtClock(phaseElapsed());           // 흐른 시간 (00:00:00 →)
-    label = '';                                 // 공부 이름은 위에 크게 보임
+    label = '집중';
   }
-  if (!timer.active) label = '';
-  else if (!timer.running) label = '일시정지';
+  if (!timer.active) label = '대기 중';
+  else if (!timer.running) label += ' · 일시정지';
 
   $('phaseLabel').textContent = label;
   $('timeText').textContent = clock;
@@ -951,16 +1222,14 @@ function renderTimer() {
   $('startBtn').textContent = timer.active && !timer.running ? '계속하기' : '시작'; // (예전 버전에서 일시정지해 둔 경우만 '계속하기')
   $('stopBtn').disabled = !timer.active;
 
-  // 공부 중이면 박스들 위에 공부 이름을 크게 (뽀모도로 휴식 시간에는 '휴식 중')
-  const onBreak = isPomo && timer.phase === 'break';
+  // 공부 중이면 '공부 중' 대신 공부 이름을 크게 표시 (뽀모도로 휴식 시간에는 '휴식 중')
   $('studyBanner').hidden = !timer.active;
-  $('bannerText').textContent = onBreak ? '휴식 중' : timer.goal;
-  $('studyBanner').classList.toggle('break', onBreak);
+  $('bannerText').textContent = isPomo && timer.phase === 'break' ? '휴식 중' : (timer.goal || '집중 중');
+  $('studyBanner').classList.toggle('break', isPomo && timer.phase === 'break');
 
-  // 공부 중에는 시간 선택 · 이름 입력칸 · 공부 질문 버튼을 숨김 (이름은 끝난 뒤 사이드바에서 수정)
-  $('pomoSettings').hidden = timer.active;
+  // 공부 중에는 이름 입력칸 · 시간 선택을 숨김 (이름은 끝난 뒤 창에서 고침)
   $('goalInput').hidden = timer.active;
-  $('openQuestions').hidden = timer.active;
+  $('pomoSettings').hidden = timer.active;
 
   document.title = timer.active ? `${clock} · 생각 기록 타이머` : '생각 기록 타이머';
 }
@@ -977,133 +1246,137 @@ function renderFilter() {
 // 입력하는 동안 어떤 카테고리로 들어갈지 미리 보여 줌
 function renderAutoHint() {
   const text = $('memoInput').value.trim();
-  const btn = $('studyQBtn');
-  btn.classList.toggle('active', studyQMode);
-  btn.setAttribute('aria-pressed', studyQMode);
-  $('memoInput').placeholder = studyQMode ? '질문 (Enter 저장)' : '떠오른 생각 (Enter 저장)';
-
   // 어느 카테고리로 들어갈지 짧게
-  if (studyQMode) $('autoHint').textContent = `📌 ${STUDY_Q}`;
-  else $('autoHint').textContent = text ? `✨ ${classifyMemo(text)}` : '';
+  $('autoHint').textContent = text ? `✨ ${classifyMemo(text)}` : '';
 }
 
-// 📌 공부 질문 — 메모지 모양, 글을 눌러서 언제든 바로 고칠 수 있음 (동그라미 = 해결 → 삭제)
-// 공부 중: 생각 적기 칸 아래 / 시작 전: '📌 공부 질문' 버튼을 누르면 뜨는 창
-function stickyNote(m) {
-  const li = el('li', 'sticky');
-  const text = el('textarea', 'sticky-text');
-  text.rows = 1;
-  text.value = m.text;
-  text.dataset.noteId = m.id;
-  text.setAttribute('aria-label', '공부 질문 고치기');
-  const check = el('button', 'pin-check', '');
-  check.type = 'button';
-  check.dataset.done = m.id;
-  check.title = '해결 (지우기)';
-  check.setAttribute('aria-label', `해결: ${m.text}`);
-  li.append(text, check);
-  return li;
-}
+// 📝 메모장 — 공부 중에는 항상, 시작 전에는 버튼을 눌렀을 때만 타이머 옆 박스에 보임
+// (적는 중에는 덮어쓰지 않음 — 커서가 튀지 않게)
+let noteOpen = false;   // 시작 전 화면에서 메모장을 열어 두었는지
+function renderNote() {
+  const area = $('noteInput');
+  if (document.activeElement !== area && area.value !== note) area.value = note;
 
-// 메모지 높이를 글 길이에 맞추기
-function fitNote(textarea) {
-  textarea.style.height = 'auto';
-  textarea.style.height = `${textarea.scrollHeight}px`;
-}
-
-function renderPinned() {
-  const list = memos
-    .filter((m) => m.category === STUDY_Q && !m.done)
-    .sort((a, b) => a.createdAt - b.createdAt);
-  $('qCount').textContent = list.length || '';
-  $('qEmpty').hidden = list.length > 0;
-  $('notesEmpty').hidden = list.length > 0;
-  ['pinnedList', 'qList'].forEach((id) => {
-    $(id).replaceChildren(...list.map(stickyNote));
+  // 메모장 ↔ 할 일 전환: 고른 쪽만 보여 줌
+  const isTodo = padMode === 'todo';
+  area.hidden = isTodo;
+  $('todoPane').hidden = !isTodo;
+  $('noteSaved').hidden = isTodo;
+  document.querySelectorAll('.pad-tab').forEach((tab) => {
+    const on = tab.dataset.pad === padMode;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-pressed', on);
   });
-  requestAnimationFrame(() => document.querySelectorAll('.sticky-text').forEach(fitNote));
+  if (isTodo) renderTodos();
+
+  document.body.classList.toggle('note-open', noteOpen);
+  $('openNote').classList.toggle('active', noteOpen);
+  $('openNote').setAttribute('aria-pressed', noteOpen);
 }
 
-// 메모지 글 고치기 → 바로 저장 (다 지우고 나가면 그 질문은 삭제)
-function editNote(textarea) {
-  const m = memos.find((x) => x.id === textarea.dataset.noteId);
-  if (!m) return;
-  m.text = textarea.value;
-  save(KEYS.memos, memos);
-  fitNote(textarea);
+// ✅ 할 일 목록 그리기
+function renderTodos() {
+  const ul = $('todoList');
+  ul.replaceChildren();
+  if (todos.length === 0) ul.append(el('li', 'todo-empty', '할 일을 적어 보세요'));
+
+  todos.forEach((t) => {
+    const li = el('li', 'todo-item');
+    li.classList.toggle('done', t.done);
+
+    // 글자를 눌러도 체크되게 label로 감쌈
+    const label = el('label', 'todo-label');
+    const check = el('input', 'todo-check');
+    check.type = 'checkbox';
+    check.checked = t.done;
+    check.dataset.todoId = t.id;
+    label.append(check, el('span', 'todo-text', t.text));
+
+    const del = el('button', 'todo-del', '×');
+    del.type = 'button';
+    del.dataset.todoDel = t.id;
+    del.title = '지우기';
+    del.setAttribute('aria-label', `'${t.text}' 지우기`);
+
+    li.append(label, del);
+    ul.append(li);
+  });
+
+  // 아래: 남은 개수 + 완료한 것 지우기
+  const left = todos.filter((t) => !t.done).length;
+  $('todoLeft').textContent = todos.length === 0 ? ''
+    : left ? `남은 할 일 ${left}개`
+    : '모두 끝냈어요! 🎉';
+  $('todoClear').hidden = left === todos.length;   // 체크한 게 하나도 없으면 숨김
 }
 
-function finishNote(textarea) {
-  const m = memos.find((x) => x.id === textarea.dataset.noteId);
-  if (!m) return;
-  m.text = textarea.value.trim();
-  if (m.text) {
-    save(KEYS.memos, memos);   // 다시 그리지 않음 (바로 동그라미를 눌러도 잘 눌리게)
-  } else {
-    deleteMemo(m.id);
-    renderPinned();
-  }
-  renderVault();
+// 지금 보이는 칸(메모장 / 할 일 입력칸)에 커서 놓기
+function focusPad() {
+  $(padMode === 'todo' ? 'todoInput' : 'noteInput').focus();
 }
 
-// 시작 전 화면의 '📌 공부 질문' 창
-function openQuestions() {
-  renderPinned();
-  $('qModal').hidden = false;
-  document.body.classList.add('no-scroll');
-  $('qInput').focus();
+function setPadMode(mode) {
+  padMode = mode === 'todo' ? 'todo' : 'note';
+  save(KEYS.pad, padMode);
+  renderNote();
+  focusPad();
 }
 
-function closeQuestions() {
-  if ($('qModal').hidden) return;
-  $('qModal').hidden = true;
-  document.body.classList.remove('no-scroll');
+function toggleNote(open = !noteOpen) {
+  noteOpen = open;
+  renderNote();
+  if (noteOpen) focusPad();
 }
 
-// 메모 한 개 (withDelete: 보관함 창에서만 삭제 · 카테고리 바꾸기 버튼 표시)
+// 맨 왼쪽 위 버튼: 사이드바 숨기기 / 보이기 (다음에 열어도 그대로)
+let sideHidden = load(KEYS.sideHidden, false);
+function renderSide() {
+  document.body.classList.toggle('side-hidden', sideHidden);
+  $('sideToggle').setAttribute('aria-label', sideHidden ? '사이드바 보이기' : '사이드바 숨기기');
+}
+
+let noteSavedTimer = null;
+function saveNote(value) {
+  note = value;
+  save(KEYS.note, note);
+  renderNote();
+  $('noteSaved').textContent = '저장됨';
+  clearTimeout(noteSavedTimer);
+  noteSavedTimer = setTimeout(() => { $('noteSaved').textContent = ''; }, 1500);
+}
+
+// 카테고리를 고르는 드롭다운 (보관함 창 · 공부를 마친 뒤 창)
+function categorySelect(m) {
+  const sel = el('select', 'chip-select');
+  sel.dataset.cat = m.id;
+  sel.setAttribute('aria-label', '카테고리 바꾸기');
+  const list = CATEGORIES.includes(m.category) ? CATEGORIES : [...CATEGORIES, m.category]; // 예전에 직접 만든 카테고리도 보이게
+  list.forEach((c) => sel.append(new Option(c, c)));
+  sel.value = m.category;
+  return sel;
+}
+
+// 메모 한 개 (withDelete: 보관함 창 · 마친 뒤 창에서 삭제 · 카테고리 바꾸기 표시)
 function memoItem(m, { withDelete = false } = {}) {
   const li = el('li', 'memo-item');
   const meta = el('div', 'memo-meta');
-  const d = new Date(m.createdAt);
   const when = fmtTime(m.createdAt);
   if (withDelete) {
-    // 오른쪽 창에서는 카테고리 칩을 누르면 다른 카테고리로 바꿀 수 있음
-    const chip = el('button', 'chip chip-btn', m.category);
-    chip.type = 'button';
-    chip.dataset.cycle = m.id;
-    chip.title = '눌러서 카테고리 바꾸기';
-    meta.append(chip, el('span', 'memo-time', when));
+    meta.append(categorySelect(m), el('span', 'memo-time', when));
   } else {
     meta.append(el('span', 'chip', m.category), el('span', 'memo-time', when));
   }
-  if (m.done) {
-    li.classList.add('done');
-    if (withDelete) {
-      // 오른쪽 창에서 '해결함'을 다시 누르면 공부 질문 목록에 다시 띄움
-      const tag = el('button', 'chip chip-btn done-tag', '해결함 ↺');
-      tag.type = 'button';
-      tag.dataset.undone = m.id;
-      tag.title = '다시 띄우기';
-      meta.append(tag);
-    } else {
-      meta.append(el('span', 'chip done-tag', '해결함'));
-    }
-  }
   li.append(meta, el('p', 'memo-text', m.text));
   if (withDelete) {
-    const del = el('button', 'del-btn rec-del', '🗑');   // 휴지통 → 한 번 더 누르면 삭제
-    del.type = 'button';
+    const del = el('button', 'del-btn', '삭제');
     del.dataset.id = m.id;
-    del.dataset.label = '🗑';
-    del.title = '생각 삭제';
-    del.setAttribute('aria-label', '생각 삭제');
     li.append(del);
   }
   return li;
 }
 
 // ③ 생각 보관함 — 사이드바의 '생각 보관함'을 누르면 열리는 창
-//    공부 중(active)에는 사이드바 메뉴가 잠겨서 열 수 없음 (공부 질문만 메모 칸 아래에 보임)
+//    공부 중(active)에는 사이드바가 숨겨져서 열 수 없음
 function renderVault() {
   const locked = timer.active;
   // 5. 지금 보관 중인 생각 개수 — 공부 중에는 이번 공부에서 적은 개수도 함께
@@ -1129,7 +1402,7 @@ function renderVaultList() {
   const box = $('vaultList');
   box.replaceChildren();
   if (list.length === 0) {
-    box.append(el('p', 'empty', '보관된 생각이 없어요.'));
+    box.append(el('p', 'empty with-char', '보관된 생각이 없어요.'));
     return;
   }
 
@@ -1147,53 +1420,33 @@ function renderVaultList() {
   });
 }
 
-// ④ 공부 기록 — 자세한 기록은 사이드바의 '공부 기록함' 창에서
+// ④ 공부 기록 — 자세한 기록은 사이드바의 '기록함' 창에서
 function renderRecords() {
   if (openedDrawer === 'historyDrawer') renderHistory();
 }
 
-// 사이드바: 접기 / 펴기 + 오늘 한 공부 목록 (누르면 이어서 공부, 연필 = 이름 바꾸기)
-function renderSidebar() {
-  document.body.classList.toggle('side-closed', sideClosed);
-
+// 타이머 아래: 오늘 한 공부 이어하기 버튼 (최근 3개, 공부 중이 아닐 때만)
+function renderResume() {
   const today = dateKey(new Date());
   const todays = records
     .filter((r) => r.date === today)
-    .sort((a, b) => b.endedAt - a.endedAt);
+    .sort((a, b) => b.endedAt - a.endedAt)
+    .slice(0, 3);
+  $('resumeBox').hidden = timer.active || todays.length === 0;
 
-  const ul = $('todayList');
-  ul.replaceChildren();
-  if (todays.length === 0) ul.append(el('li', 'today-empty', '아직 없어요'));
+  const box = $('resumeList');
+  box.replaceChildren();
   todays.forEach((r) => {
-    const li = el('li', 'today-item');
-    li.dataset.recordId = r.id;
-    li.tabIndex = 0;
-    li.title = '이어서 공부하기';
-    const edit = el('button', 'today-edit', '✎');
-    edit.type = 'button';
-    edit.dataset.editId = r.id;
-    edit.title = '이름 바꾸기';
-    edit.setAttribute('aria-label', `${r.goal} 이름 바꾸기`);
-    const del = el('button', 'today-edit rec-del', '🗑');
-    del.type = 'button';
-    del.dataset.delId = r.id;
-    del.dataset.label = '🗑';
-    del.title = '기록 삭제';
-    del.setAttribute('aria-label', `${r.goal} 기록 삭제`);
-    li.append(el('span', 'record-goal', r.goal || '목표 없음'), el('span', 'today-time', fmtHM(r.studyMs)), edit, del);
-    ul.append(li);
+    const btn = el('button', 'resume-btn');
+    btn.type = 'button';
+    btn.dataset.recordId = r.id;
+    btn.append(
+      el('span', 'resume-play', '▶'),
+      el('span', 'resume-goal', r.goal || '목표 없음'),
+      el('span', 'resume-time', fmtDuration(r.studyMs)),
+    );
+    box.append(btn);
   });
-}
-
-function setSidebar(closed) {
-  sideClosed = closed;
-  if (window.innerWidth > 760) save(KEYS.sidebar, closed); // 휴대폰에서 연 건 기억하지 않음
-  renderSidebar();
-}
-
-// 휴대폰에서는 사이드바 메뉴를 누르면 사이드바를 닫음 (화면을 가리지 않게)
-function closeSidebarOnMobile() {
-  if (window.innerWidth <= 760) setSidebar(true);
 }
 
 // 공부 기록 한 줄
@@ -1212,10 +1465,9 @@ function recordItem(r, { withDate = false } = {}) {
   edit.type = 'button';
   edit.dataset.editId = r.id;
   edit.title = '이름 수정';
-  const del = el('button', 'record-edit rec-del', '삭제');
+  const del = el('button', 'record-edit rec-del', '삭제');   // 한 번 누르면 빨갛게 → 한 번 더 누르면 지워짐
   del.type = 'button';
   del.dataset.delId = r.id;
-  del.dataset.label = '삭제';
   actions.append(edit, del);
 
   li.append(info, actions);
@@ -1225,17 +1477,17 @@ function recordItem(r, { withDate = false } = {}) {
 // 기록의 공부 목표 고치기 — '수정'을 누르면 그 자리에 입력칸이 생김
 // Enter 또는 다른 곳 클릭 = 저장, Esc = 취소
 function startEditGoal(btn) {
-  const li = btn.closest('.record-item, .today-item');
+  const li = btn.closest('.record-item');
   const r = records.find((x) => x.id === btn.dataset.editId);
   if (!li || !r || li.querySelector('.record-goal-input')) return;
 
   const input = el('input', 'record-goal-input');
   input.type = 'text';
   input.maxLength = 40;
-  input.placeholder = '공부 이름';
+  input.placeholder = '이름';
   input.value = r.goal;
   li.querySelector('.record-goal').replaceWith(input);
-  if (btn.classList.contains('record-edit')) btn.textContent = '저장';
+  btn.textContent = '저장';
   input.focus();
   input.select();
 
@@ -1244,12 +1496,11 @@ function startEditGoal(btn) {
     if (finished) return;
     finished = true;
     if (keep) {
-      r.goal = input.value.trim() || r.goal;   // 비우면 원래 이름 그대로
+      r.goal = input.value.trim() || r.goal;   // 비워 두면 원래 이름 그대로
       save(KEYS.records, records);
       mergeTodayRecords(); // 이름을 바꿔서 오늘 다른 기록과 같아지면 합침
     }
     renderRecords();
-    renderSidebar();
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); finish(true); }
@@ -1258,36 +1509,46 @@ function startEditGoal(btn) {
   input.addEventListener('blur', () => finish(true));
 }
 
-// 주간 그래프 막대 위에 쓰는 짧은 시간 (예: 2:30)
+// 주간 그래프 막대 위에 쓰는 짧은 시간 (예: 3시간, 45분)
 function fmtShort(ms) {
-  return fmtHM(ms);
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min}분`;
+  const h = Math.round(min / 6) / 10;           // 소수 첫째 자리까지 (예: 1.5시간)
+  return `${h}시간`;
 }
 
 // 그 주의 월요일 0시
-function weekStart(d) {
+function startOfWeek(d) {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // 일요일(0)은 6일 전 월요일로
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));   // 일요일(0) → 6일 전, 월요일(1) → 그대로
   return x;
 }
 
-// ④ 공부 기록함 — 주간(요일별 막대 7개) / 월간(일별 막대)
+// 이번 기간을 처음 보여 줄 때의 기준 날짜 (주간: 이번 주 월요일 / 월간: 이번 달 1일)
+function currentPeriodStart(view) {
+  const now = new Date();
+  return view === 'week' ? startOfWeek(now) : new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+// ⑤ 기록 자세히 보기 — 주간(요일별 막대 7개) / 월간(일별 막대)
 function renderHistory() {
   const sums = sumByDate();
   const now = new Date();
+  const todayKey = dateKey(now);
   const isWeek = historyView === 'week';
-  const bars = [];                               // { key, label, title, ms, isNow }
+  const bars = [];                               // { key, label, title, ms }
 
   if (isWeek) {
-    const start = weekStart(historyCursor);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    $('periodLabel').textContent = `${start.getMonth() + 1}/${start.getDate()} ~ ${end.getMonth() + 1}/${end.getDate()}`;
-    ['월', '화', '수', '목', '금', '토', '일'].forEach((dayName, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(historyCursor.getFullYear(), historyCursor.getMonth(), historyCursor.getDate() + i);
       const key = dateKey(d);
-      bars.push({ key, label: dayName, title: `${d.getMonth() + 1}월 ${d.getDate()}일`, ms: sums[key] || 0, isNow: key === dateKey(now) });
-    });
+      bars.push({ key, label: DAY_KO[d.getDay()], title: `${d.getMonth() + 1}월 ${d.getDate()}일`, ms: sums[key] || 0 });
+    }
+    const first = historyCursor;
+    const last = new Date(first.getFullYear(), first.getMonth(), first.getDate() + 6);
+    $('periodLabel').textContent = first.getMonth() === last.getMonth()
+      ? `${first.getMonth() + 1}월 ${first.getDate()}일 – ${last.getDate()}일`
+      : `${first.getMonth() + 1}월 ${first.getDate()}일 – ${last.getMonth() + 1}월 ${last.getDate()}일`;
   } else {
     const y = historyCursor.getFullYear();
     const mo = historyCursor.getMonth();          // 0 = 1월
@@ -1300,22 +1561,30 @@ function renderHistory() {
         label: d === 1 || d % 5 === 0 ? String(d) : '', // 글자가 겹치지 않게 1, 5, 10…만 표시
         title: `${mo + 1}월 ${d}일`,
         ms: sums[key] || 0,
-        isNow: key === dateKey(now),
       });
     }
   }
 
   // 요약: 총 시간 / 공부한 날 수 / 공부한 날 기준 하루 평균
-  const keys = new Set(bars.map((b) => b.key));
+  const keys = bars.map((b) => b.key);
   const total = bars.reduce((n, b) => n + b.ms, 0);
   const days = bars.filter((b) => b.ms > 0).length;
   $('statTotal').textContent = fmtDuration(total);
   $('statDays').textContent = `${days}일`;
   $('statAvg').textContent = days ? fmtDuration(total / days) : '-';
+
   $('historyEmpty').hidden = total > 0;
 
+  // 아래에 기록을 보여 줄 날: 누른 날이 이 기간에 없으면 → 오늘 / 공부한 마지막 날 / 기간의 마지막 날
+  if (!keys.includes(historyDay)) {
+    const studied = bars.filter((b) => b.ms > 0);
+    historyDay = keys.includes(todayKey) ? todayKey
+      : studied.length ? studied[studied.length - 1].key
+      : keys[keys.length - 1];
+  }
+
   // 이번 주(이번 달)보다 미래로는 못 넘어가게
-  $('nextPeriod').disabled = keys.has(dateKey(now));
+  $('nextPeriod').disabled = historyCursor.getTime() >= currentPeriodStart(historyView).getTime();
 
   document.querySelectorAll('.hist-tab').forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.view === historyView);
@@ -1327,8 +1596,12 @@ function renderHistory() {
   chart.dataset.view = historyView;
   chart.replaceChildren();
   bars.forEach((b) => {
-    const col = el('div', 'bar-col');
-    if (b.isNow) col.classList.add('today');
+    const col = el('button', 'bar-col');            // 막대를 누르면 그날 기록을 아래에 보여 줌
+    col.type = 'button';
+    col.dataset.day = b.key;
+    if (b.key === todayKey) col.classList.add('today');
+    col.classList.toggle('selected', b.key === historyDay);
+    col.setAttribute('aria-pressed', b.key === historyDay);
     col.title = `${b.title}: ${fmtDuration(b.ms)}`; // 마우스를 올리면 정확한 시간 표시
 
     const bar = el('div', 'bar');
@@ -1342,15 +1615,17 @@ function renderHistory() {
     chart.append(col);
   });
 
-  // 그 기간의 기록 목록 (최근 것부터, '수정'으로 이름 고치기)
-  $('historyListTitle').textContent = isWeek ? '이 주의 기록' : '이 달의 기록';
+  // 누른 날의 기록 목록 (최근 것부터, '수정'으로 이름 고치기 · '삭제')
+  const [y, m, d] = historyDay.split('-').map(Number);
+  $('historyListTitle').textContent = `${m}월 ${d}일 (${DAY_KO[new Date(y, m - 1, d).getDay()]})`;
   const list = $('historyList');
   list.replaceChildren();
-  const periodRecords = records
-    .filter((r) => keys.has(r.date))
+  const dayRecords = records
+    .filter((r) => r.date === historyDay)
     .sort((a, b) => b.endedAt - a.endedAt);
-  if (periodRecords.length === 0) list.append(el('li', 'empty', '기록이 없어요'));
-  periodRecords.forEach((r) => list.append(recordItem(r, { withDate: true })));
+  if (dayRecords.length === 0) list.append(el('li', 'empty', '기록이 없어요.'));
+  dayRecords.forEach((r) => list.append(recordItem(r)));
+
   renderShare();
 }
 
@@ -1379,13 +1654,13 @@ function closeDrawer(restoreFocus = true) {
 
 // 왼쪽 창: 공부 기록 자세히 보기
 function openHistory() {
-  historyCursor = new Date(); // 열 때마다 이번 주 / 이번 달부터
+  historyCursor = currentPeriodStart(historyView); // 열 때마다 이번 주(이번 달)부터
+  historyDay = null;                               // 아래 목록은 오늘부터
   renderHistory();
   openDrawer('historyDrawer', $('openHistory'));
 }
 
-// 오른쪽 창: 생각 보관함 전체 보기
-// afterStudy: 공부를 마치고 자동으로 열린 경우 → 맨 위에 이번 공부 요약을 보여 줌
+// 왼쪽 창: 생각 보관함 전체 보기
 function openVault() {
   if (timer.active) return; // 공부 중에는 잠김
   renderVault();
@@ -1396,65 +1671,52 @@ function openVault() {
 function moveHistory(step) {
   const y = historyCursor.getFullYear();
   const mo = historyCursor.getMonth();
-  if (historyView === 'week') {
-    historyCursor = new Date(y, mo, historyCursor.getDate() + step * 7); // 일주일씩
-  } else {
-    historyCursor = new Date(y, mo + step, 1);   // 12월 + 1 → 다음 해 1월로 자동 계산됨
-  }
+  historyCursor = historyView === 'week'
+    ? new Date(y, mo, historyCursor.getDate() + step * 7)   // 7일 앞 / 뒤 (달이 넘어가도 자동 계산됨)
+    : new Date(y, mo + step, 1);                            // 12월 + 1 → 다음 해 1월로 자동 계산됨
   renderHistory();
 }
 
-// 집중 · 휴식 시간 선택 버튼 그리기 (휴식은 집중 시간을 골랐을 때만 보임)
-// 범위 안의 숫자로 맞추기 (숫자가 아니면 가장 작은 값)
-function clampTime(phase, minutes) {
-  const [min, max] = TIME_RANGE[phase];
-  const v = Math.round(Number(minutes));
-  return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : min;
-}
+// 집중 · 휴식 시간 고르기 (A안: 탭 전환형)
+// 위 탭에서 집중 / 휴식을 고르면 → 아래 버튼들이 그 시간을 바꿈
+let pomoTab = 'focus';   // 지금 고르고 있는 탭: 'focus' | 'break'
+
+const minText = (min) => (min ? `${min}분` : '제한 없음');
 
 function renderPomoSettings() {
-  if (pomoSetting.focus === 0) addTarget = 'focus';   // 제한 없음이면 휴식은 고를 필요 없음
-  const target = addTarget;
-  const current = pomoSetting[target];
-  const list = target === 'focus' ? FOCUS_CHOICES : BREAK_CHOICES;
+  const focus = pomoSetting.focus;
+  if (!focus) pomoTab = 'focus';   // 집중이 '제한 없음'이면 쉬는 시간이 없으므로 휴식 탭은 못 고름
 
-  // 위 탭: 집중 25분 | 휴식 5분 (제한 없음이면 휴식 탭은 숨김)
-  $('focusTab').textContent = pomoSetting.focus ? `집중 ${pomoSetting.focus}분` : '집중 제한 없음';
-  $('breakTab').textContent = `휴식 ${pomoSetting.break}분`;
-  $('breakTab').hidden = pomoSetting.focus === 0;
-  document.querySelectorAll('.time-tabs button').forEach((tab) => {
-    const on = tab.dataset.target === target;
-    tab.classList.toggle('on', on);
-    tab.setAttribute('aria-selected', on);
+  // 탭: [집중 25분] [휴식 5분]
+  $('focusValue').textContent = minText(focus);
+  $('breakValue').textContent = minText(pomoSetting.break);
+  document.querySelectorAll('.pomo-tab').forEach((tab) => {
+    const on = tab.dataset.tab === pomoTab;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-pressed', on);
+    tab.disabled = tab.dataset.tab === 'break' && !focus;
   });
 
-  // 아래 선택 버튼 한 줄: 지금 시간 이하 중 가장 큰 선택지가 진하게,
-  // +로 더했으면 그 버튼에 더한 시간을 보여 줌 (예: 20분 +5 → '25분')
-  const box = $('timeChoices');
-  box.replaceChildren();
-  const picked = current === 0 ? 0 : Math.max(...list.filter((m) => m > 0 && m <= current), list.find((m) => m > 0));
-  list.forEach((min) => {
-    const on = min === picked;
-    const shown = on ? current : min;
-    const btn = el('button', 'time-chip', shown === 0 ? '제한 없음' : `${shown}분`);
+  // 시간 버튼: 집중 [제한 없음] [15분] [25분] [60분] [120분] / 휴식 [5분] [10분] [15분] [20분]
+  const now = pomoSetting[pomoTab];
+  const list = pomoTab === 'focus' ? FOCUS_CHOICES : BREAK_CHOICES;
+  $('timeChoices').replaceChildren(...list.map((min) => {
+    const btn = el('button', 'time-chip', minText(min));
     btn.type = 'button';
-    btn.dataset.minutes = min;
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-pressed', on);
-    box.append(btn);
-  });
+    btn.dataset.min = min;
+    btn.classList.toggle('active', min === now);
+    btn.setAttribute('aria-pressed', min === now);
+    return btn;
+  }));
 
-  // +5분 · +10분: 집중이 '제한 없음'이면 숨김, 최대에 닿으면 흐리게
-  $('timeAdd').hidden = pomoSetting.focus === 0;
-  document.querySelectorAll('[data-add]').forEach((btn) => {
-    btn.disabled = current >= TIME_RANGE[target][1];
-  });
+  // +5 · +10분: 최대 시간이 되면 흐리게
+  document.querySelectorAll('.time-add').forEach((btn) => { btn.disabled = now >= TIME_MAX[pomoTab]; });
 }
 
 // 시간 선택 저장 (공부 중이 아닐 때만)
 function setPomoSetting(phase, minutes) {
   if (timer.active) return;
-  pomoSetting[phase] = minutes;
+  pomoSetting[phase] = Math.min(TIME_MAX[phase], Math.max(0, minutes));
   save(KEYS.pomodoro, pomoSetting);
   timer.mode = modeFromSetting();
   timer.phase = 'focus';
@@ -1464,10 +1726,12 @@ function setPomoSetting(phase, minutes) {
 }
 
 function renderAll() {
-  renderSidebar();
+  renderSide();
+  $('goalInput').placeholder = '이름';
+  renderResume();
   renderFilter();
   renderAutoHint();
-  renderPinned();
+  renderNote();
   renderPomoSettings();
   renderTimer();
   renderVault();
@@ -1475,7 +1739,9 @@ function renderAll() {
 }
 
 /* ---------- 7-2. 화면 색상 ----------
-   대표색 3가지 중 하나를 고르면, 배경 · 타이머 칸 색은 그 색을 연하게 해서 자동으로 맞춤
+   사이드바의 동그라미 4개 중 하나를 누르면 바로 바뀜 (창이 따로 뜨지 않음)
+   마지막 무지개 동그라미를 누르면 원하는 색을 직접 고를 수 있음 ({ id: 'custom', primary })
+   대표색 하나만 고르면, 배경 · 타이머 칸 색은 그 색을 연하게 해서 자동으로 맞춤
    style.css의 :root에 있는 색 변수(--bg, --primary 등)를 자바스크립트로 바꿔서 화면 전체 색을 바꿈 */
 
 // 글자 · 카드 · 선 색 (테마와 상관없이 같음)
@@ -1484,18 +1750,15 @@ const BASE_COLORS = {
   field: '#FCFAF7', border: '#E4E0D8', 'danger-bg': '#EBD9D3', 'danger-text': '#8A4B3E',
 };
 
-// 대표색 3가지 — 기본 베이지는 원래 쓰던 색을 그대로 씀
+// 대표색 목록 — 기본 베이지는 원래 쓰던 색을 그대로 씀
 const THEMES = [
-  { id: 'beige', name: '베이지', primary: '#8C8B79', bg: '#F5EEE8', cream: '#F5EDDA', sage: '#CFD1C7' },
-  { id: 'sky',   name: '하늘',   primary: '#5D7FA3' },
-  { id: 'peach', name: '복숭아', primary: '#BF7A62' },
+  { id: 'beige',    name: '베이지', primary: '#8C8B79', bg: '#F5EEE8', cream: '#F5EDDA', sage: '#CFD1C7' },
+  { id: 'sky',      name: '하늘',   primary: '#5D7FA3' },
+  { id: 'mint',     name: '민트',   primary: '#5C8A72' },
+  { id: 'lavender', name: '라벤더', primary: '#7B6CA6' },
 ];
 
-let theme = load(KEYS.theme, { id: 'beige' }); // { id: 'sky' } 또는 직접 고른 색 { id: 'custom', primary: '#4a90e2' }
-const isHex = (v) => /^#[0-9a-f]{6}$/i.test(v || '');
-if (!(theme.id === 'custom' && isHex(theme.primary)) && !THEMES.some((t) => t.id === theme.id)) {
-  theme = { id: 'beige' }; // 예전에 고른 색이 목록에 없으면 기본색
-}
+let theme = load(KEYS.theme, { id: 'beige' }); // { id: 'sky' } 또는 { id: 'custom', primary: '#AABBCC' }
 
 // 색의 밝기 (0 = 검정, 1 = 흰색)
 function brightness(hex) {
@@ -1512,8 +1775,8 @@ function tint(hex, amount) {
 
 // 지금 테마의 색: 대표색 + 대표색으로 만든 배경 · 타이머 칸 색
 function themeColors() {
-  const t = theme.id === 'custom'
-    ? { primary: theme.primary }                              // 직접 고른 색
+  const t = theme.id === 'custom' && theme.primary
+    ? { primary: theme.primary }
     : THEMES.find((x) => x.id === theme.id) || THEMES[0];
   return {
     primary: t.primary,
@@ -1544,7 +1807,8 @@ function setTheme(next) {
   renderTheme();
 }
 
-// 사이드바 아래 대표색 동그라미 3개 + 무지개 동그라미(직접 고르기)
+
+// 사이드바의 화면 색상: 대표색 동그라미(이름 없이) + 무지개 동그라미(직접 고르기)
 function renderTheme() {
   const box = $('themePresets');
   box.replaceChildren();
@@ -1562,12 +1826,10 @@ function renderTheme() {
     box.append(btn);
   });
 
-  // 무지개 동그라미: 직접 고른 색을 쓰는 중이면 그 색으로 보여 줌
-  const custom = theme.id === 'custom';
-  $('customColorBtn').classList.toggle('active', custom);
-  $('customDot').classList.toggle('rainbow', !custom);
-  $('customDot').style.background = custom ? theme.primary : '';
-  if (document.activeElement !== $('colorMain')) $('colorMain').value = themeColors().primary.toLowerCase();
+  const isCustom = theme.id === 'custom' && Boolean(theme.primary);
+  $('customTheme').classList.toggle('active', isCustom);
+  const input = $('colorMain');
+  if (document.activeElement !== input) input.value = themeColors().primary.toLowerCase();
 }
 
 
@@ -1578,23 +1840,13 @@ $('startBtn').addEventListener('click', startTimer);
 $('stopBtn').addEventListener('click', stopTimer);
 
 // 집중 · 휴식 시간 선택
-// 선택 버튼 한 줄 → 위 탭에서 고른 쪽(집중 / 휴식)의 시간으로
-$('timeChoices').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-minutes]');
-  if (btn) setPomoSetting(addTarget, Number(btn.dataset.minutes));
-});
-// +5분 · +10분: 위 탭에서 고른 쪽에 더하기 (넘으면 가장 큰 값까지)
-document.querySelectorAll('[data-add]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    setPomoSetting(addTarget, clampTime(addTarget, pomoSetting[addTarget] + Number(btn.dataset.add)));
-  });
-});
-// 위 탭: 집중 / 휴식 고르기
-document.querySelectorAll('.time-tabs button').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    addTarget = tab.dataset.target;
-    renderPomoSettings();
-  });
+$('pomoSettings').addEventListener('click', (e) => {
+  const tab = e.target.closest('.pomo-tab');
+  if (tab && !tab.disabled) { pomoTab = tab.dataset.tab; renderPomoSettings(); }
+  const choice = e.target.closest('[data-min]');
+  if (choice) setPomoSetting(pomoTab, Number(choice.dataset.min));                               // 시간 버튼
+  const add = e.target.closest('[data-add]');
+  if (add) setPomoSetting(pomoTab, pomoSetting[pomoTab] + Number(add.dataset.add));             // +5 · +10분
 });
 
 // 메모 저장
@@ -1603,69 +1855,72 @@ $('memoForm').addEventListener('submit', (e) => {
   const text = $('memoInput').value.trim();
   if (!text) return;
 
-  // '📌 공부 질문' 버튼이 눌려 있으면 공부 질문으로, 아니면 자동 분류
-  const category = studyQMode ? STUDY_Q : classifyMemo(text);
+  const category = classifyMemo(text);   // 내용을 보고 자동 분류
   addMemo(text, category);
   $('memoInput').value = '';
-  studyQMode = false;   // 한 번 저장하면 다시 자동 분류로
-
-  let msg;
-  if (category === STUDY_Q) msg = `📌 ${STUDY_Q}에 저장`;
-  else msg = `'${category}'에 보관`;
-  showToast('memoToast', msg);
+  showToast('memoToast', `'${category}'에 보관`);
 
   renderAutoHint();
-  renderPinned();
   renderVault();
-  $('memoInput').focus();
-});
-
-// '📌 공부 질문' 버튼: 누르면 켜지고, 다시 누르면 꺼짐
-$('studyQBtn').addEventListener('click', () => {
-  studyQMode = !studyQMode;
-  renderAutoHint();
   $('memoInput').focus();
 });
 
 // 입력하는 동안 자동 분류 결과 미리 보기
 $('memoInput').addEventListener('input', renderAutoHint);
 
-// 📌 공부 질문 메모지: 고치기 / 해결 → 지우기 (공부 중 메모지 / 시작 전 창 둘 다)
-['pinnedList', 'qList'].forEach((id) => {
-  $(id).addEventListener('input', (e) => {
-    if (e.target.dataset.noteId) editNote(e.target);
-  });
-  $(id).addEventListener('focusout', (e) => {
-    if (e.target.dataset.noteId) finishNote(e.target);
-  });
-  $(id).addEventListener('keydown', (e) => {
-    // Enter = 다 고침 (Shift+Enter = 줄바꿈)
-    if (e.target.dataset.noteId && e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      e.target.blur();
-    }
-  });
-  $(id).addEventListener('click', (e) => {
-    const doneId = e.target.dataset.done;
-    if (!doneId) return;
-    deleteMemo(doneId);      // 해결한 질문은 보관함에서도 바로 지움
-    renderPinned();
-    renderVault();
-  });
+// 📝 메모장: 적는 대로 바로 저장
+$('noteInput').addEventListener('input', (e) => saveNote(e.target.value));
+$('openNote').addEventListener('click', () => toggleNote());          // 시작 전: 타이머 옆에 메모장 열기 / 닫기
+$('closeNote').addEventListener('click', () => toggleNote(false));
+
+// [📝 메모장 | ✅ 할 일] 버튼: 누르면 칸이 바뀜
+document.querySelectorAll('.pad-tab').forEach((tab) => {
+  tab.addEventListener('click', () => setPadMode(tab.dataset.pad));
 });
 
-// 시작 전 '📌 공부 질문' 창: 열기 / 닫기 / 질문 추가
-$('openQuestions').addEventListener('click', openQuestions);
-$('qClose').addEventListener('click', closeQuestions);
-$('qModal').addEventListener('click', (e) => { if (e.target === $('qModal')) closeQuestions(); });
-$('qForm').addEventListener('submit', (e) => {
+// ✅ 할 일 추가 (Enter 또는 '추가' 버튼)
+$('todoForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  const text = $('qInput').value.trim();
+  const text = $('todoInput').value.trim();
   if (!text) return;
-  addMemo(text, STUDY_Q);
-  $('qInput').value = '';
-  renderPinned();
-  renderVault();
+  addTodo(text);
+  $('todoInput').value = '';
+  renderTodos();
+  $('todoInput').focus();
+});
+// 한글 입력 중(조합 중) Enter가 두 번 처리되지 않게
+$('todoInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) {
+    e.preventDefault();
+    $('todoForm').requestSubmit();
+  }
+});
+// 체크 / 체크 풀기
+$('todoList').addEventListener('change', (e) => {
+  const id = e.target.dataset.todoId;
+  if (!id) return;
+  toggleTodo(id, e.target.checked);
+  renderTodos();
+});
+// × : 하나 지우기
+$('todoList').addEventListener('click', (e) => {
+  const del = e.target.closest('[data-todo-del]');
+  if (!del) return;
+  deleteTodo(del.dataset.todoDel);
+  renderTodos();
+  $('todoInput').focus();
+});
+// 완료한 것 한꺼번에 지우기
+$('todoClear').addEventListener('click', () => {
+  clearDoneTodos();
+  renderTodos();
+});
+
+// 사이드바 숨기기 / 보이기
+$('sideToggle').addEventListener('click', () => {
+  sideHidden = !sideHidden;
+  save(KEYS.sideHidden, sideHidden);
+  renderSide();
 });
 
 // Enter = 저장, Shift+Enter = 줄바꿈
@@ -1680,123 +1935,103 @@ $('memoInput').addEventListener('keydown', (e) => {
 // 보관함 필터 / 메모 삭제
 $('filterSelect').addEventListener('change', renderVault);
 
+// 삭제 버튼: 팝업 대신 두 번 눌러야 지워짐 (첫 번째: '한 번 더 누르면 삭제')
+// 지웠으면 true
+function tryDelete(btn) {
+  if (!btn.classList.contains('confirm')) {
+    btn.classList.add('confirm');
+    btn.textContent = '한 번 더 누르면 삭제';
+    return false;
+  }
+  deleteMemo(btn.dataset.id);
+  return true;
+}
+
 $('vaultList').addEventListener('click', (e) => {
-  const undoneId = e.target.dataset.undone;
-  if (undoneId) {
-    toggleDone(undoneId);
-    renderPinned();
+  if (e.target.dataset.id && tryDelete(e.target)) {
+    renderFilter();
     renderVault();
-    return;
   }
-  const cycleId = e.target.dataset.cycle;
-  if (cycleId) {
-    cycleCategory(cycleId);
-    renderPinned();
-    renderVault();
-    return;
-  }
-  const id = e.target.dataset.id;
-  if (!id) return;
-  if (armDelete(e.target)) return;   // 첫 번째 누름: '삭제'로 바뀜
-  deleteMemo(id);
-  renderPinned();
+});
+// 카테고리 드롭다운에서 고르면 바로 바뀜
+$('vaultList').addEventListener('change', (e) => {
+  if (!e.target.dataset.cat) return;
+  setCategory(e.target.dataset.cat, e.target.value);
   renderVault();
 });
 
 // 옆 창 열기 / 닫기 — × 버튼, 바깥 어두운 곳 클릭, Esc 키로 닫힘
-$('openHistory').addEventListener('click', () => { closeSidebarOnMobile(); openHistory(); });
-$('openVault').addEventListener('click', () => { closeSidebarOnMobile(); openVault(); });
+$('openHistory').addEventListener('click', openHistory);
+$('openVault').addEventListener('click', openVault);
 $('closeHistory').addEventListener('click', () => closeDrawer());
 $('closeVault').addEventListener('click', () => closeDrawer());
 $('drawerBackdrop').addEventListener('click', () => closeDrawer());
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (closeShareEdit()) return;   // 수정 창이 열려 있으면 그것만 닫음
   closeReview();
-  closeQuestions();
   closeDrawer();
 });
 
 // 공부를 마친 뒤 창: '확인 완료' → 원래 화면으로
 $('reviewDone').addEventListener('click', closeReview);
 
-// 공부를 마친 뒤 창: 카테고리 바꾸기 / 삭제
-// 삭제는 실수로 지우지 않게 두 번 눌러야 함 (첫 번째: '한 번 더 누르면 삭제')
+// 공부를 마친 뒤 창: 카테고리 바꾸기(드롭다운) / 삭제(두 번 누르기)
 $('reviewList').addEventListener('click', (e) => {
-  const t = e.target;
-  if (t.dataset.cycle) {
-    cycleCategory(t.dataset.cycle);
-  } else if (t.dataset.undone) {
-    toggleDone(t.dataset.undone);
-  } else if (t.dataset.id) {
-    if (armDelete(t)) return;        // 첫 번째 누름: '삭제'로 바뀜
-    deleteMemo(t.dataset.id);
-  } else {
-    return;
+  if (e.target.dataset.id && tryDelete(e.target)) {
+    renderReviewList();
+    renderVault();
   }
-  renderReviewList();
-  renderPinned();
-  renderVault();
+});
+$('reviewList').addEventListener('change', (e) => {
+  if (!e.target.dataset.cat) return;
+  setCategory(e.target.dataset.cat, e.target.value);
 });
 
-// 공부 기록함 창: '수정' → 목표 고치기
+
+// 기록함 창: '수정' → 목표 고치기 / '삭제' → 한 번 더 누르면 기록 지우기
 $('historyList').addEventListener('click', (e) => {
   const del = e.target.closest('[data-del-id]');
   if (del) {
-    confirmDelete(del);
+    if (!del.classList.contains('confirm')) {
+      resetDeleteButtons();
+      del.classList.add('confirm');
+      return;
+    }
+    deleteRecord(del.dataset.delId);
+    renderAll();
+    renderHistory();
     return;
   }
   const edit = e.target.closest('[data-edit-id]');
   if (edit) startEditGoal(edit);
 });
 
-// 사이드바 오늘 목록: 누르면 이어서 공부 / 연필 = 이름 바꾸기 / 휴지통 = 삭제
-$('todayList').addEventListener('click', (e) => {
-  const del = e.target.closest('[data-del-id]');
-  if (del) {
-    confirmDelete(del);
-    return;
-  }
-  const edit = e.target.closest('[data-edit-id]');
-  if (edit) {
-    startEditGoal(edit);
-    return;
-  }
-  if (e.target.closest('input')) return;          // 이름 바꾸는 중
-  const item = e.target.closest('[data-record-id]');
-  if (item) {
-    closeSidebarOnMobile();
-    resumeRecord(item.dataset.recordId);
-  }
-});
-$('todayList').addEventListener('keydown', (e) => {
-  const item = e.target.closest('.today-item');
-  if (e.key === 'Enter' && e.target === item) resumeRecord(item.dataset.recordId);
-});
-
-// 삭제 버튼을 한 번 누른 뒤 다른 곳을 누르면 '삭제'를 취소
+// 빨갛게 바뀐 '삭제'는 다른 곳을 누르면 원래대로
+function resetDeleteButtons() {
+  document.querySelectorAll('.rec-del.confirm').forEach((b) => b.classList.remove('confirm'));
+}
 document.addEventListener('click', (e) => {
-  if (e.target.closest('.rec-del')) return;
-  document.querySelectorAll('.rec-del.confirm').forEach((b) => {
-    b.classList.remove('confirm');
-    b.textContent = b.dataset.label;
-  });
+  if (!e.target.closest('.rec-del')) resetDeleteButtons();
 });
 
-// 휴대폰: 사이드바 바깥을 누르면 사이드바 닫기
-document.addEventListener('click', (e) => {
-  if (window.innerWidth > 760 || sideClosed) return;
-  if (e.target.closest('#sidebar, #sideOpen')) return;
-  setSidebar(true);
+// 타이머 아래 '이어하기' 버튼 → 그 공부를 이어서 시작
+$('resumeList').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-record-id]');
+  if (btn) resumeRecord(btn.dataset.recordId);
 });
 
-// 사이드바 접기 / 펴기, 새 공부
-$('sideClose').addEventListener('click', () => setSidebar(true));
-$('sideOpen').addEventListener('click', () => setSidebar(false));
-$('newStudy').addEventListener('click', () => {
-  closeDrawer(false);
-  closeSidebarOnMobile();
-  $('goalInput').value = '';
-  $('goalInput').focus();
+// 이름 칸에서 Enter = 시작
+$('goalInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); startTimer(); }
+});
+
+// 기록함 그래프: 막대(날)를 누르면 그날 기록 보기
+$('historyChart').addEventListener('click', (e) => {
+  const col = e.target.closest('[data-day]');
+  if (!col) return;
+  historyDay = col.dataset.day;
+  renderHistory();
 });
 
 // 공부 기록 창: 이전 / 다음 기간, 주간 / 월간 전환
@@ -1805,17 +2040,53 @@ $('nextPeriod').addEventListener('click', () => moveHistory(1));
 document.querySelectorAll('.hist-tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     historyView = tab.dataset.view;
-    historyCursor = new Date();   // 바꾸면 이번 주 / 이번 달부터
+    historyCursor = currentPeriodStart(historyView);   // 바꾸면 이번 주 / 이번 달부터
     renderHistory();
   });
 });
 
+// SNS용 이미지 꾸미기
+// 오늘의 명언: 누를 때마다 다음 명언으로 (그날만 적용) / 직접 쓰기: 입력칸 열기
+document.querySelectorAll('[data-text-mode]').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (b.dataset.textMode === 'quote') {
+      const today = dateKey(new Date());
+      const n = shareSet.shift.date === today ? shareSet.shift.n + 1 : 1;
+      setShare({ textMode: 'quote', shift: { date: today, n } });
+    } else {
+      setShare({ textMode: 'custom' });
+      $('shareText').focus();
+    }
+  });
+});
+$('shareText').addEventListener('input', (e) => setShare({ custom: e.target.value }));
+$('shareFonts').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-font]');
+  if (btn) setShare({ font: btn.dataset.font });
+});
+$('sharePalettes').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-palette]');
+  if (btn) setShare({ palette: btn.dataset.palette });
+});
+// 무지개: 색을 고르는 동안 바로 바뀜
+$('paletteColor').addEventListener('input', (e) => setShare({ palette: 'custom', paletteColor: e.target.value }));
+// 수정 창 열기 / 닫기 / 저장
+$('openShareEdit').addEventListener('click', openShareEdit);
+$('closeShareModal').addEventListener('click', closeShareEdit);
+$('shareModalDone').addEventListener('click', closeShareEdit);
+$('shareModalSave').addEventListener('click', () => saveShareImage('shareModalToast'));
+$('shareModal').addEventListener('click', (e) => { if (e.target === $('shareModal')) closeShareEdit(); }); // 바깥 클릭
+$('subjectList').addEventListener('click', (e) => {
+  const dot = e.target.closest('[data-subject]');
+  if (dot) setShare({ colors: { ...shareSet.colors, [dot.dataset.subject]: dot.dataset.color } });
+});
+
 // SNS용 이미지: 저장 / 공유
-$('shareSave').addEventListener('click', saveShareImage);
+$('shareSave').addEventListener('click', () => saveShareImage());
 $('shareSend').addEventListener('click', sendShareImage);
 $('shareSend').hidden = !canShareImage();
 
-// 화면 색상: 사이드바 아래 동그라미
+// 화면 색상: 사이드바의 동그라미를 누르면 바로 바뀜
 $('themePresets').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-theme]');
   if (btn) setTheme({ id: btn.dataset.theme });
@@ -1833,6 +2104,7 @@ setInterval(tick, 250);
 
 /* ---------- 9. 앞으로 만들 기능 (개발 일정 기준) ----------
 
-   TODO 사용 후기 반영 — 불편한 점 수정
+   TODO(11월 말) 2차 피드백 중 정하지 못한 것
+   - 로고 정하기 / 전시회용 QR 코드 (웹페이지 주소가 정해지면)
    (후보) 뽀모도로 전환 알림 소리, 메모 수정 기능, 자동 분류 단어 목록 늘리기
 */
