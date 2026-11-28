@@ -85,6 +85,8 @@ body {
   cursor: pointer;
 }
 .login-btn:hover { background: var(--bg); }
+/* 로그인이 안 될 때 이유 */
+.login-msg { margin-top: 8px; font-size: 12px; line-height: 1.45; color: var(--danger-text); word-break: keep-all; }
 .profile { display: flex; align-items: center; gap: 10px; padding: 4px; }
 .profile-pic {
   position: relative;

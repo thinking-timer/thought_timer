@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jua@5/400.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/gowun-dodum@5/400.css">
   <!-- ?v=날짜 : 파일을 고칠 때마다 바꾸면, 브라우저가 예전 파일 대신 새 파일을 받아 옴 -->
-  <link rel="stylesheet" href="style.css?v=20261128-3">
+  <link rel="stylesheet" href="style.css?v=20261128-4">
 </head>
 <body>
   <!-- 맨 왼쪽 위 로고 : 누르면 사이드바를 숨기거나 다시 보여 줌 (공부 중에는 숨김) -->
@@ -53,6 +53,8 @@
          firebase-config.js를 채우기 전에는 안 보임 -->
     <div id="account" class="account" hidden>
       <button id="loginBtn" class="login-btn" type="button">구글로 로그인</button>
+      <!-- 로그인이 안 될 때 이유를 보여 주는 글 -->
+      <p id="loginMsg" class="login-msg" role="alert" hidden></p>
       <div id="profile" class="profile" hidden>
         <span class="profile-pic">
           <span id="profileInitial"></span>
@@ -305,8 +307,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-  <script src="firebase-config.js?v=20261128-3"></script>
-  <script src="sync.js?v=20261128-3"></script>
-  <script src="script.js?v=20261128-3"></script>
+  <script src="firebase-config.js?v=20261128-4"></script>
+  <script src="sync.js?v=20261128-4"></script>
+  <script src="script.js?v=20261128-4"></script>
 </body>
 </html>

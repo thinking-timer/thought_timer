@@ -58,6 +58,7 @@
     $('loginBtn').hidden = !!user;
     $('profile').hidden = !user;
     if (!user) return;
+    showLoginMsg('');   // 로그인되면 안내 글 지우기
     const name = user.displayName || user.email || '';
     $('profileName').textContent = name;
     $('profileInitial').textContent = name.trim().charAt(0).toUpperCase();
@@ -212,19 +213,66 @@
 
   /* ---------- 로그인 / 로그아웃 ---------- */
 
+  // 로그인 버튼 아래에 왜 안 되는지 알려 주는 글
+  function showLoginMsg(text) {
+    $('loginMsg').textContent = text;
+    $('loginMsg').hidden = !text;
+  }
+
+  // 로그인이 안 될 때 보여 줄 말 (Firebase 오류 코드별)
+  function loginErrorText(err) {
+    const host = location.hostname;
+    switch (err.code) {
+      case 'auth/popup-closed-by-user':
+      case 'auth/cancelled-popup-request':
+      case 'auth/user-cancelled':
+        return '';   // 로그인 창을 그냥 닫은 경우
+      case 'auth/unauthorized-domain':
+        return `이 주소(${host})는 로그인이 허용되지 않았어요. Firebase 콘솔 → Authentication → 설정 → 승인된 도메인에 '${host}'을(를) 추가해 주세요.`;
+      case 'auth/operation-not-supported-in-environment':
+        return '파일을 직접 열면 로그인할 수 없어요. 웹사이트 주소로 열어 주세요.';
+      case 'auth/network-request-failed':
+        return '인터넷 연결을 확인해 주세요.';
+      case 'auth/popup-blocked':
+        return '로그인 창이 차단됐어요. 주소창 오른쪽의 팝업 차단을 풀고 다시 눌러 주세요.';
+      default:
+        return `로그인이 안 됐어요 (${err.code || err.message})`;
+    }
+  }
+
   async function login() {
+    showLoginMsg('');
+    // 파일을 더블클릭해서 연 경우(주소가 file://)에는 구글 로그인이 되지 않음
+    if (location.protocol === 'file:') {
+      showLoginMsg('파일을 직접 열면 로그인할 수 없어요. GitHub에 올린 사이트 주소로 열거나, VS Code Live Server로 열어 주세요.');
+      return;
+    }
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });   // 계정 고르는 창이 항상 뜨게
     try {
       await auth.signInWithPopup(provider);
     } catch (err) {
       console.warn('[sync] 로그인 실패', err);
-      // 팝업이 막히면 페이지를 옮겨서 로그인
+      // 팝업이 막히면 페이지를 옮겨서 로그인 (그래도 안 되면 이유를 보여 줌)
       if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-environment') {
-        auth.signInWithRedirect(provider);
+        try {
+          await auth.signInWithRedirect(provider);
+          return;
+        } catch (err2) {
+          console.warn('[sync] 로그인 실패 (페이지 이동)', err2);
+          showLoginMsg(loginErrorText(err2));
+          return;
+        }
       }
+      showLoginMsg(loginErrorText(err));
     }
   }
+
+  // 페이지를 옮겨서 로그인했다가 돌아왔을 때 실패했으면 이유를 보여 줌
+  auth.getRedirectResult().catch((err) => {
+    console.warn('[sync] 로그인 실패 (돌아온 뒤)', err);
+    showLoginMsg(loginErrorText(err));
+  });
 
   async function logout() {
     clearTimeout(pushTimer);
